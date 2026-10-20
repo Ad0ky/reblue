@@ -45,6 +45,7 @@ Keep this list current.
 | `src/ui/rex_app.cpp` | merge: upstream's input gate (window focus) with nfsmw-nx's Switch rule (the menu owns the pad while it has focus) |
 | `resources/templates/init/rexglue_cmake.inja` | merge: upstream's `names.original`; in a cross build an empty `<title>_codegen` target (re:Blue orders its own targets after it) |
 | `cmake/rexglue_export_targets.cmake`, `CMakeLists.txt` | skip the targets a Switch build does not have (the code generator, the GPU plugin) when exporting the `rex::` aliases |
+| `src/ui/window_switch.cpp`, `include/rex/ui/window_switch.h` | the nightly's two-argument `Window::Create`; `GetDisplayPixelSize` returns the display mode's resolution |
 
 The Switch layer's own documentation is in nfsmw-nx's `docs/`
 (`platform-notes.md`, `toolchain.md`, `porting-another-game.md`).

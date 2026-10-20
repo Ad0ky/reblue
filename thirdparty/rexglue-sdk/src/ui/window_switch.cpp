@@ -29,10 +29,18 @@ bool ViNWindowSurface::GetSizeImpl(uint32_t& width_out, uint32_t& height_out) co
 }
 
 std::unique_ptr<Window> Window::Create(WindowedAppContext& app_context,
-                                       const std::string_view title, uint32_t desired_logical_width,
-                                       uint32_t desired_logical_height) {
-  return std::make_unique<WindowSwitch>(app_context, title, desired_logical_width,
-                                        desired_logical_height);
+                                       const std::string_view title) {
+  // reblue: the nightly SDK's two-argument Create. One layer, the size of the
+  // display mode (OpenImpl takes the real size from the NWindow).
+  uint32_t width = 0;
+  uint32_t height = 0;
+  WindowSwitch::QueryDisplayResolution(width, height);
+  return std::make_unique<WindowSwitch>(app_context, title, width, height);
+}
+
+bool WindowSwitch::GetDisplayPixelSize(uint32_t& width, uint32_t& height) const {
+  QueryDisplayResolution(width, height);
+  return true;
 }
 
 WindowSwitch::WindowSwitch(WindowedAppContext& app_context, const std::string_view title,

@@ -30,6 +30,9 @@ class WindowSwitch final : public Window {
   // output resolution when docked.
   static void QueryDisplayResolution(uint32_t& width_out, uint32_t& height_out);
 
+  // reblue: the nightly SDK's display size query (the current mode's resolution).
+  bool GetDisplayPixelSize(uint32_t& width, uint32_t& height) const override;
+
   // Called by SwitchWindowedAppContext on the UI thread.
   void HandleDisplayModeChange();
   void HandleFocusChange(bool has_focus);
