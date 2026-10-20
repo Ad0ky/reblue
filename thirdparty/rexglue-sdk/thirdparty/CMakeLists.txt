@@ -302,7 +302,16 @@ set(SDL_DUMMYVIDEO OFF CACHE BOOL "" FORCE)
 
 # Linux video and audio backends. Both video drivers are always built so the
 # one in use stays a runtime choice.
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND REXGLUE_HOST_TOOLS_ONLY)
+    # reblue: the Switch build's host stage only runs the code generator, so
+    # SDL is built headless (no X11/Wayland/audio development packages needed).
+    foreach(_rex_sdl_off IN ITEMS SDL_X11 SDL_WAYLAND SDL_KMSDRM SDL_ALSA SDL_PULSEAUDIO
+            SDL_PIPEWIRE SDL_JACK SDL_SNDIO SDL_IBUS SDL_HIDAPI_LIBUSB SDL_DIALOG)
+        set(${_rex_sdl_off} OFF CACHE BOOL "" FORCE)
+    endforeach()
+    set(SDL_DUMMYVIDEO ON CACHE BOOL "" FORCE)
+    set(SDL_DUMMYAUDIO ON CACHE BOOL "" FORCE)
+elseif(UNIX AND NOT APPLE)
     set(SDL_X11               ON  CACHE BOOL "" FORCE)
     set(SDL_WAYLAND           ON  CACHE BOOL "" FORCE)
     set(SDL_ALSA              ON  CACHE BOOL "" FORCE)

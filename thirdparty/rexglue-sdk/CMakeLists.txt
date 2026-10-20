@@ -23,6 +23,7 @@ option(REXGLUE_ENABLE_SANITIZERS "Enable UndefinedBehaviorSanitizer" OFF)
 option(REXGLUE_ENABLE_FIDELITYFX "Enable optional AMD FidelityFX integration (experimental)" OFF)
 option(REXGLUE_ENABLE_TRACY                "Enable Tracy profiler integration" ON)
 option(REXGLUE_ENABLE_PERF_COUNTERS        "Enable lightweight perf counter registry and overlay" ON)
+option(REXGLUE_HOST_TOOLS_ONLY             "reblue: host build that only needs the rexglue code generator (headless SDL)" OFF)
 option(REXGLUE_PLATFORM_SWITCH             "Build for Nintendo Switch (devkitA64 + libnx; set by the toolchain file)" OFF)
 # nfsmw: the Switch build for the title's own deko3d renderer (docs/HowToDeko3d.md): no Vulkan, no NVK and no
 # GPU plugin in the SDK; the title brings its graphics system, presenter and UI drawer.

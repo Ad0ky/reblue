@@ -134,10 +134,15 @@ add_custom_command(
 )
 add_custom_target({{ names.snake_case }}_codegen
     DEPENDS "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/codegen.build.stamp")
-elseif(NOT REXGLUE_ENTRYPOINT_GENERATED_SOURCES)
-    message(FATAL_ERROR
-        "No generated sources in {{ entrypoint_out_dir }} and no rexglue to produce them "
-        "(cross build). Run 'rexglue codegen {{ names.snake_case }}_manifest.toml' with a host SDK first.")
+else()
+    if(NOT REXGLUE_ENTRYPOINT_GENERATED_SOURCES)
+        message(FATAL_ERROR
+            "No generated sources in {{ entrypoint_out_dir }} and no rexglue to produce them "
+            "(cross build). Run 'rexglue codegen {{ names.snake_case }}_manifest.toml' with a host SDK first.")
+    endif()
+    # reblue: an empty target, so a title that orders its own targets after
+    # codegen still configures.
+    add_custom_target({{ names.snake_case }}_codegen)
 endif()
 
 # Include DLL module shared library targets if codegen has generated them
