@@ -21,6 +21,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 UPSTREAM = 'https://github.com/rexglue/rexglue-sdk.git'
 COMMIT = 'bd833a2ab69d305f99ddf57418fc38ffec8af93d'  # nightly-20261002-bd833a2a, the SDK re:Blue v1.3.1 builds against
@@ -77,6 +78,42 @@ def checkout(work, url, commit, folder=''):
     run('git', 'checkout', '-q', 'FETCH_HEAD', cwd=work)
 
 
+# reblue: submodules the Switch build never compiles (macOS Vulkan runtime, the
+# test framework, the profiler: REXGLUE_ENABLE_TRACY is off on both stages).
+SKIPPED_SUBMODULES = {'thirdparty/moltenvk', 'thirdparty/vulkan-loader', 'thirdparty/catch2',
+                      'thirdparty/tracy'}
+
+
+def update_submodules(work):
+    """Each submodule on its own, shallow, with retries.
+
+    One `git submodule update --init --recursive` clones ~20 repositories with
+    their full history (FFmpeg, glslang, SDL...) back to back, and GitHub
+    throttles such a burst from one address: the clones after it fail with
+    "could not read Username". Shallow clones move a fraction of the data, and a
+    failed one is retried after a pause.
+    """
+    paths = subprocess.run(
+        ['git', 'config', '-f', '.gitmodules', '--get-regexp', r'^submodule\..*\.path$'],
+        cwd=work, check=True, capture_output=True, text=True).stdout.split()[1::2]
+    env = dict(os.environ, GIT_TERMINAL_PROMPT='0')
+    for path in paths:
+        if path in SKIPPED_SUBMODULES:
+            print(f'> skip {path} (not used by the Switch build)')
+            continue
+        for attempt in range(1, 6):
+            print(f'> submodule {path} (attempt {attempt})', flush=True)
+            r = subprocess.run(['git', 'submodule', 'update', '--init', '--recursive', '--depth', '1',
+                                '--', path], cwd=work, env=env)
+            if r.returncode == 0:
+                break
+            if attempt == 5:
+                raise SystemExit(f'could not fetch {path} from GitHub; check the network and run the build again')
+            wait = 30 * attempt
+            print(f'  failed, retrying in {wait} s', flush=True)
+            time.sleep(wait)
+
+
 def remove_tree(path):
     if sys.version_info >= (3, 12):
         shutil.rmtree(path, onexc=remove_readonly)
@@ -99,7 +136,7 @@ def main():
         work = tempfile.mkdtemp(prefix='rexglue-sdk-')
         try:
             checkout(work, UPSTREAM, COMMIT)
-            run('git', 'submodule', 'update', '--init', '--recursive', cwd=work)
+            update_submodules(work)
             copied, kept = copy_missing(os.path.join(work, 'thirdparty'), target)
             print(f'{copied} files copied into sdk/thirdparty, {kept} files of this port kept')
             open(stamp, 'w').write(COMMIT + '\n')
