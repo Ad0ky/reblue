@@ -28,6 +28,36 @@ void RaiseFDLimit() {}
 
 } // namespace bd::platform
 
+#elif defined(__SWITCH__)
+
+#include <string>
+
+extern "C" {
+#include <switch/types.h>
+#include <switch/result.h>
+#include <switch/kernel/svc.h>
+}
+
+namespace bd::platform {
+
+// No /proc and no descriptor limit on Horizon: report the process memory the
+// kernel accounts, the resource that actually runs out on the console.
+std::string ResourceUse() {
+  u64 used = 0, total = 0;
+  if (R_FAILED(svcGetInfo(&used, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0)) ||
+      R_FAILED(svcGetInfo(&total, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0)))
+    return "memory unknown";
+  char line[96];
+  std::snprintf(line, sizeof(line), "memory %llu/%llu MiB",
+                static_cast<unsigned long long>(used >> 20),
+                static_cast<unsigned long long>(total >> 20));
+  return line;
+}
+
+void RaiseFDLimit() {}
+
+} // namespace bd::platform
+
 #else
 
 #include <dirent.h>

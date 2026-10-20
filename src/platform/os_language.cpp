@@ -4,12 +4,56 @@
  */
 #include "platform/os_language.h"
 
+#if defined(__SWITCH__)
+extern "C" {
+#include <switch/types.h>
+#include <switch/result.h>
+#include <switch/services/set.h>
+}
+#else
 #include <SDL3/SDL_locale.h>
 #include <SDL3/SDL_stdinc.h>
+#endif
 
 #include <string_view>
 
 namespace bd::platform {
+#if defined(__SWITCH__)
+
+// The console's system language (Settings > System > Language).
+u32 DetectOsXLanguage() {
+  u32 xlang = 1;
+  if (R_FAILED(setInitialize()))
+    return xlang;
+  u64 code = 0;
+  SetLanguage language = SetLanguage_ENUS;
+  if (R_SUCCEEDED(setGetSystemLanguage(&code)) &&
+      R_SUCCEEDED(setMakeLanguage(code, &language))) {
+    switch (language) {
+    case SetLanguage_JA: xlang = 2; break;
+    case SetLanguage_DE: xlang = 3; break;
+    case SetLanguage_FR:
+    case SetLanguage_FRCA: xlang = 4; break;
+    case SetLanguage_ES:
+    case SetLanguage_ES419: xlang = 5; break;
+    case SetLanguage_IT: xlang = 6; break;
+    case SetLanguage_KO: xlang = 7; break;
+    case SetLanguage_ZHTW:
+    case SetLanguage_ZHHANT: xlang = 8; break;
+    case SetLanguage_PT:
+    case SetLanguage_PTBR: xlang = 9; break;
+    case SetLanguage_ZHCN:
+    case SetLanguage_ZHHANS: xlang = 10; break;
+    case SetLanguage_RU: xlang = 12; break;
+    default: xlang = 1; break;
+    }
+  }
+  setExit();
+  return xlang;
+}
+
+#else
+
 namespace {
 
 // SDL reports no script subtag, so Traditional Chinese goes by region.
@@ -41,6 +85,8 @@ u32 DetectOsXLanguage() {
   SDL_free(locales);
   return xlang ? xlang : 1;
 }
+
+#endif // __SWITCH__
 
 u32 XLanguageFromCode(std::string_view code) {
   char c[8] = {};

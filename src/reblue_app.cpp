@@ -14,7 +14,9 @@
 #include <string>
 #include <string_view>
 
+#if !defined(__SWITCH__)
 #include <SDL3/SDL_video.h>
+#endif
 
 #include <rex/cvar.h>
 #include <rex/dbg.h>
@@ -71,6 +73,11 @@ std::filesystem::path ProgramDir() {
 }
 #endif
 
+#if defined(__SWITCH__)
+// One fullscreen layer, sized by the console: nothing to raise or constrain.
+void RaiseMainWindow() {}
+void ApplyWindowSizeConstraints() {}
+#else
 SDL_Window *MainWindow() {
   int count = 0;
   SDL_Window **windows = SDL_GetWindows(&count);
@@ -98,6 +105,7 @@ void ApplyWindowSizeConstraints() {
   const float ar = static_cast<float>(bd::gpu::Output::ConfiguredAspect());
   SDL_SetWindowAspectRatio(win, ar, ar);
 }
+#endif // __SWITCH__
 
 // The profile dir IS user_data_root. Saves sit in a sibling subtree of
 // achievements/ and any XAM content, so there is no content manager contention.
@@ -618,7 +626,32 @@ ReblueApp::OnFinalizePaths(const rex::PathConfig &defaults,
     existing_install = std::move(cfg);
   }
 
-#ifdef REBLUE_BUILD_INSTALLER
+#if defined(__SWITCH__)
+  // No installer on the console: the game/ folder that re:Blue's PC installer
+  // copies out of the three discs is put beside the NRO on the SD card
+  // (sdmc:/switch/reblue/game/default.xex). It is used as a portable install.
+  (void)resume;
+  {
+    const auto root = bd::AppRootFolder();
+    bd::installer::InstallConfig cfg;
+    cfg.install_root = root;
+    cfg.schema_version = bd::installer::kInstallSchemaVersion;
+    cfg.app_version = REBLUE_VERSION_STRING;
+    cfg.connector = bd::installer::InstallConnector::kPortableFile;
+    if (std::filesystem::exists(cfg.game_data_path() / "default.xex")) {
+      BD_INFO("Switch: game data at {}", cfg.game_data_path().string());
+      return PathsForInstall(defaults, cfg);
+    }
+    bd::platform::ShowFatalError(
+        "re:Blue - game files not found",
+        "Copy the game folder of a re:Blue PC install (default.xex, pack, "
+        "movie, ...) to\n" +
+            cfg.game_data_path().string() +
+            "\non the SD card. See docs/SWITCH.md.");
+    app_context().QuitFromUIThread();
+    return std::nullopt;
+  }
+#elif defined(REBLUE_BUILD_INSTALLER)
   if (REXCVAR_GET(no_installer)) {
     bd::platform::ShowFatalError(
         "reblue - game not installed",

@@ -7,7 +7,9 @@
  */
 #include "platform/native_window.h"
 
+#if !defined(__SWITCH__)
 #include <SDL3/SDL_video.h>
+#endif
 #if defined(__APPLE__)
 #include <SDL3/SDL_metal.h>
 
@@ -32,6 +34,24 @@ bool GetNativeRenderWindow(rex::ui::Window *window, plume::RenderWindow &out) {
   out = static_cast<plume::RenderWindow>(window->GetNativeWindowHandle());
   if (!out) {
     BD_ERROR("Window has no native HWND yet");
+    return false;
+  }
+  return true;
+}
+
+#elif defined(__SWITCH__)
+
+// libnx's <switch.h> is kept out: its Mutex/Event/Thread typedefs collide with
+// the SDK's. plume declares struct NWindow itself (plume-switch.patch).
+extern "C" NWindow *nwindowGetDefault(void);
+
+bool GetNativeRenderWindow(rex::ui::Window *window, plume::RenderWindow &out) {
+  // Horizon has one layer per application: the SDK's WindowSwitch wraps the
+  // same default NWindow, and plume makes a VK_NN_vi_surface from it.
+  (void)window;
+  out = nwindowGetDefault();
+  if (!out) {
+    BD_ERROR("No default NWindow for the Vulkan surface");
     return false;
   }
   return true;

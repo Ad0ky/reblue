@@ -20,6 +20,13 @@
 #if defined(_WIN32)
 #include "core/windows_lean.h"
 #include <timeapi.h>
+#elif defined(__SWITCH__)
+#include <cstdio>
+extern "C" {
+// libnx runtime internals (the same exit the SDK's rex_app.cpp takes).
+extern unsigned int __nx_applet_exit_mode;
+[[noreturn]] void __libnx_exit(int rc);
+}
 #else
 #include <sys/resource.h>
 #endif
@@ -57,6 +64,10 @@ void DisableHighResTimer() {
 void DemoteThreadToBackground() {
 #if defined(_WIN32)
   ::SetThreadPriority(::GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+#elif defined(__SWITCH__)
+  // Horizon does not time-share between priorities: a lower one only runs
+  // when every higher thread on its core waits, so a demoted worker could
+  // starve. It keeps the priority it was created with.
 #else
   // who=0 is the calling THREAD on Linux, not the process.
   ::setpriority(PRIO_PROCESS, 0, 10);
@@ -72,6 +83,14 @@ void TerminateProcessNow(int exit_code) {
   for (;;) {
     CpuPause();
   }
+#elif defined(__SWITCH__)
+  // std::_Exit returns the NRO to hbloader with the guest, GPU and audio
+  // threads still alive, and the Homebrew Menu then crashes. An application
+  // ends through the applet exit (see the SDK's rex_app.cpp, OnClosing).
+  (void)exit_code;
+  std::fflush(nullptr);
+  __nx_applet_exit_mode = 1;
+  __libnx_exit(0);
 #else
   std::_Exit(exit_code);
 #endif

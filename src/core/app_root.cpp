@@ -34,7 +34,9 @@ std::filesystem::path g_app_root_override;
 } // namespace
 
 bool IsPackagedApplication() {
-#if !defined(_WIN32)
+#if defined(__SWITCH__)
+  return false;
+#elif !defined(_WIN32)
   if (rex::platform::env::get("APPIMAGE"))
     return true;
 #if defined(__APPLE__)
@@ -45,7 +47,10 @@ bool IsPackagedApplication() {
 }
 
 std::filesystem::path UserConfigFolder() {
-#if !defined(_WIN32)
+#if defined(__SWITCH__)
+  // Everything lives beside the NRO on the SD card.
+  return {};
+#elif !defined(_WIN32)
   if (auto xdg = rex::platform::env::get("XDG_CONFIG_HOME");
       xdg && !xdg->empty())
     return std::filesystem::path(*xdg) / "reblue";
@@ -69,7 +74,17 @@ std::filesystem::path CacheRootFor(const std::filesystem::path &root) {
 std::filesystem::path AppRootFolder() {
   if (!g_app_root_override.empty())
     return g_app_root_override;
-#if !defined(_WIN32)
+#if defined(__SWITCH__)
+  // The folder of the NRO (sdmc:/switch/reblue/reblue.nro gives /switch/reblue),
+  // which the SDK takes from argv. Started without a path (some forwarders),
+  // the fixed SD card folder of cmake/switch.cmake.
+  {
+    auto exe_dir = rex::filesystem::GetExecutableFolder();
+    if (exe_dir.empty() || exe_dir == exe_dir.root_path())
+      return std::filesystem::path(REBLUE_SWITCH_DATA_ROOT);
+    return exe_dir;
+  }
+#elif !defined(_WIN32)
   // An AppImage mount is a read-only FUSE, so nothing can be written beside the
   // executable. Everything else keeps the exe dir layout.
   if (rex::platform::env::get("APPIMAGE")) {

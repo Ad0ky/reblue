@@ -23,6 +23,8 @@
 
 #if defined(_WIN32)
 #include "core/windows_lean.h"
+#elif defined(__SWITCH__)
+#include "core/threading.h"
 #else
 #include <cerrno>
 #include <fcntl.h>
@@ -43,13 +45,16 @@ std::filesystem::path g_config_path;
 #if defined(_WIN32)
 constexpr wchar_t kInstanceLockName[] = L"Local\\reblue-single-instance";
 HANDLE g_instance_lock = nullptr;
+#elif defined(__SWITCH__)
+// One application runs at a time on Horizon: no lock needed.
 #else
 constexpr char kInstanceLockFile[] = "reblue.lock";
 int g_instance_lock = -1;
 #endif
 
 void ReleaseInstanceLock() {
-#if defined(_WIN32)
+#if defined(__SWITCH__)
+#elif defined(_WIN32)
   if (!g_instance_lock)
     return;
   ::CloseHandle(g_instance_lock);
@@ -118,6 +123,17 @@ bool SpawnProcess(const std::filesystem::path &exe, bool repair) {
   ::CloseHandle(pi.hProcess);
   return true;
 }
+#elif defined(__SWITCH__)
+// No fork/exec on Horizon. hbloader can load another NRO after this one
+// (envSetNextLoad), but only after a normal return to it, which crashes the
+// Homebrew Menu while the guest threads are alive (see core/threading.cpp).
+// So a relaunch is never attempted: callers quit and the user starts again.
+bool SpawnProcess(const std::filesystem::path &exe, bool repair) {
+  (void)exe;
+  (void)repair;
+  BD_WARN("[reboot] relaunching is not available on Nintendo Switch");
+  return false;
+}
 #else
 bool SpawnProcess(const std::filesystem::path &exe, bool repair) {
   std::vector<std::string> args;
@@ -153,7 +169,9 @@ bool SpawnProcess(const std::filesystem::path &exe, bool repair) {
 } // namespace
 
 bool AcquireInstanceLock() {
-#if defined(_WIN32)
+#if defined(__SWITCH__)
+  return true;
+#elif defined(_WIN32)
   HANDLE h = ::CreateMutexW(nullptr, FALSE, kInstanceLockName);
   if (!h) {
     BD_WARN("[reboot] instance lock unavailable (err {})", ::GetLastError());
@@ -248,6 +266,14 @@ bool RelaunchSelf(bool repair) {
   //    once is exactly the overlap that wedges drivers.
   if (quiesce)
     quiesce();
+
+#if defined(__SWITCH__)
+  // 3. No relaunch on the console (SpawnProcess): settings are saved, the
+  //    renderer released, so quit and the user starts re:Blue again.
+  BD_WARN("[reboot] Switch: exiting instead of relaunching");
+  rex::FlushLogging();
+  bd::TerminateProcessNow(0);
+#endif
 
   // 3. Steam owns the launched process in Game Mode, so a spawn from here would
   //    start outside the session with no focus while Steam counts the game as

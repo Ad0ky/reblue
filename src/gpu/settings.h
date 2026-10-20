@@ -104,7 +104,12 @@ inline constexpr PresetBundle kPresets[kQualityPresetCount] = {
 // install boots on are a named tier rather than a set of values that happens
 // to sit near one. The installer reads the same row the menu does, so the
 // wizard opens on Medium instead of Custom.
+#if defined(__SWITCH__)
+// The Switch GPU (Tegra X1) cannot afford Medium's MSAA and 4096 shadow maps.
+inline constexpr QualityPreset kDefaultPreset = QualityPreset::Low;
+#else
 inline constexpr QualityPreset kDefaultPreset = QualityPreset::Medium;
+#endif
 inline constexpr PresetBundle kDefaultSettings =
     kPresets[static_cast<u32>(kDefaultPreset)];
 

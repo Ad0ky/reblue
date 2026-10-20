@@ -63,7 +63,9 @@ std::u16string Utf8ToU16(std::string_view s) {
 
 #else // !defined(_WIN32)
 
+#if !defined(__SWITCH__)
 #include <iconv.h>
+#endif
 #include <rex/types.h>
 #include <vector>
 
@@ -99,6 +101,34 @@ u32 NextUtf8(std::string_view s, size_t &i) {
   return cp;
 }
 
+#if defined(__SWITCH__)
+// Horizon's newlib has no iconv. Shift-JIS only carries the guest's debug
+// prints and mod rows added to game tables, so ASCII passes through and any
+// other character becomes '?'. (Known gap, docs/SWITCH.md.)
+std::string Convert(std::string_view s, const char *to, const char *from) {
+  (void)to;
+  (void)from;
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size(); ++i) {
+    const u8 c = static_cast<u8>(s[i]);
+    if (c < 0x80) {
+      out.push_back(static_cast<char>(c));
+      continue;
+    }
+    out.push_back('?');
+    // Skip the rest of a multi-byte character: UTF-8 continuation bytes, or
+    // the trail byte of a Shift-JIS double-byte character.
+    if (c >= 0xC0 && c < 0xF8 && std::string_view(from) == "UTF-8") {
+      while (i + 1 < s.size() && (static_cast<u8>(s[i + 1]) & 0xC0) == 0x80)
+        ++i;
+    } else if (((c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC)) && i + 1 < s.size()) {
+      ++i;
+    }
+  }
+  return out;
+}
+#else
 std::string Convert(std::string_view s, const char *to, const char *from) {
   if (s.empty())
     return {};
@@ -124,6 +154,7 @@ std::string Convert(std::string_view s, const char *to, const char *from) {
   iconv_close(cd);
   return std::string(out.data(), static_cast<size_t>(outbuf - out.data()));
 }
+#endif // __SWITCH__
 
 } // namespace
 
