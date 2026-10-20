@@ -28,7 +28,7 @@ index be1c5c3..3da45a4 100644
      typedef HWND RenderWindow;
  #elif defined(__ANDROID__)
 diff --git a/plume_vulkan.cpp b/plume_vulkan.cpp
-index 11abda8..c918236 100644
+index 11abda8..840e89b 100644
 --- a/plume_vulkan.cpp
 +++ b/plume_vulkan.cpp
 @@ -19,6 +19,16 @@
@@ -70,7 +70,116 @@ index 11abda8..c918236 100644
          VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME,
          // Vulkan spec requires this to be enabled if supported by the driver.
          VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
-@@ -2104,7 +2118,19 @@ namespace plume {
+@@ -985,6 +999,86 @@ namespace plume {
+ 
+     // VulkanTexture
+ 
++#if defined(__SWITCH__)
++    // reblue (Switch): texture lifetime guard, a diagnostic for a crash in
++    // vmaDestroyImage on an allocation that was already freed. It tracks the
++    // live textures and the allocations they own, remembers where the last
++    // destroys came from, and on a second destroy (or VMA handing out an
++    // allocation that is still owned) writes both call chains to stderr
++    // (rex_stderr.log) as offsets into reblue.elf, then aborts so the crash
++    // hooks write rex_crash.log as well.
++    namespace switchguard {
++        extern "C" char _start[];
++        constexpr int kFrames = 12;
++        struct Record { const void *texture; const void *allocation; uintptr_t frames[kFrames]; };
++        std::mutex mutex;
++        std::unordered_map<const void *, Record> live;          // texture -> creation
++        std::unordered_map<const void *, const void *> owners;  // allocation -> texture
++        Record recent[512];
++        uint32_t recentNext = 0;
++
++        void capture(uintptr_t *out) {
++            const uintptr_t base = reinterpret_cast<uintptr_t>(&_start[0]);
++            void **fp = static_cast<void **>(__builtin_frame_address(0));
++            int i = 0;
++            for (; i < kFrames && fp != nullptr; ++i) {
++                const uintptr_t ret = reinterpret_cast<uintptr_t>(fp[1]);
++                out[i] = ret >= base ? ret - base : ret;
++                void **next = static_cast<void **>(fp[0]);
++                if (next <= fp || (reinterpret_cast<uintptr_t>(next) & 0xF) != 0) { ++i; break; }
++                fp = next;
++            }
++            for (; i < kFrames; ++i) out[i] = 0;
++        }
++
++        void print(const char *what, const Record &r) {
++            fprintf(stderr, "[texguard]   %s: texture %p allocation %p, chain (reblue.elf+):", what, r.texture, r.allocation);
++            for (int i = 0; i < kFrames && r.frames[i] != 0; ++i) fprintf(stderr, " 0x%lx", (unsigned long)r.frames[i]);
++            fprintf(stderr, "\n");
++        }
++
++        void created(const void *texture, const void *allocation) {
++            Record r{texture, allocation, {}};
++            capture(r.frames);
++            std::lock_guard<std::mutex> lock(mutex);
++            if (allocation != nullptr) {
++                auto it = owners.find(allocation);
++                if (it != owners.end()) {
++                    fprintf(stderr, "[texguard] VMA returned allocation %p that texture %p still owns\n", allocation, it->second);
++                    print("new texture", r);
++                    auto l = live.find(it->second);
++                    if (l != live.end()) print("current owner, created at", l->second);
++                    fflush(stderr);
++                    abort();
++                }
++                owners[allocation] = texture;
++            }
++            live[texture] = r;
++        }
++
++        void destroyed(const void *texture, const void *allocation) {
++            Record r{texture, allocation, {}};
++            capture(r.frames);
++            std::lock_guard<std::mutex> lock(mutex);
++            auto it = live.find(texture);
++            if (it == live.end()) {
++                fprintf(stderr, "[texguard] texture %p destroyed but not live (double destroy?)\n", texture);
++                print("this destroy", r);
++                for (uint32_t i = 0; i < 512; ++i) {
++                    const Record &old = recent[(recentNext + 511 - i) % 512];
++                    if (old.texture == texture) { print("earlier destroy", old); break; }
++                }
++                fflush(stderr);
++                abort();
++            }
++            live.erase(it);
++            if (allocation != nullptr) owners.erase(allocation);
++            recent[recentNext] = r;
++            recentNext = (recentNext + 1) % 512;
++        }
++    }
++#endif
++
+     VulkanTexture::VulkanTexture(VulkanDevice *device, VulkanPool *pool, const RenderTextureDesc &desc) {
+         assert(device != nullptr);
+ 
+@@ -1035,6 +1129,9 @@ namespace plume {
+             fprintf(stderr, "vmaCreateImage failed with error code 0x%X.\n", res);
+             return;
+         }
++#   if defined(__SWITCH__)
++        switchguard::created(this, allocation);
++#   endif
+ 
+         createImageView(imageInfo.format);
+     }
+@@ -1048,6 +1145,11 @@ namespace plume {
+     }
+ 
+     VulkanTexture::~VulkanTexture() {
++#   if defined(__SWITCH__)
++        if (ownership && (vk != VK_NULL_HANDLE)) {
++            switchguard::destroyed(this, allocation);
++        }
++#   endif
+         if (imageView != VK_NULL_HANDLE) {
+             vkDestroyImageView(device->vk, imageView, nullptr);
+         }
+@@ -2104,7 +2206,19 @@ namespace plume {
  
          VkResult res;
  
@@ -91,7 +200,7 @@ index 11abda8..c918236 100644
          assert(desc.renderWindow != 0);
          VkWin32SurfaceCreateInfoKHR surfaceCreateInfo = {};
          surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-@@ -2479,7 +2505,18 @@ namespace plume {
+@@ -2479,7 +2593,18 @@ namespace plume {
      }
  
      void VulkanSwapChain::getWindowSize(uint32_t &dstWidth, uint32_t &dstHeight) const {
@@ -111,7 +220,7 @@ index 11abda8..c918236 100644
          RECT rect;
          GetClientRect(desc.renderWindow, &rect);
          dstWidth = rect.right - rect.left;
-@@ -3849,6 +3886,14 @@ namespace plume {
+@@ -3849,6 +3974,14 @@ namespace plume {
  
          // Store properties.
          vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
@@ -126,7 +235,7 @@ index 11abda8..c918236 100644
  
          // Check for supported features.
          void *featuresChain = nullptr;
-@@ -4481,7 +4526,23 @@ namespace plume {
+@@ -4481,7 +4614,23 @@ namespace plume {
      // VulkanInterface
  
      VulkanInterface::VulkanInterface() {
