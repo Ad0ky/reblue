@@ -23,7 +23,7 @@ import sys
 import tempfile
 
 UPSTREAM = 'https://github.com/rexglue/rexglue-sdk.git'
-COMMIT = 'c94f5ebdcb3c9d1a460ca48e04f9758448f8d518'  # v0.10.0
+COMMIT = 'bd833a2ab69d305f99ddf57418fc38ffec8af93d'  # nightly-20261002-bd833a2a, the SDK re:Blue v1.3.1 builds against
 
 # (repository, commit, folder inside it or '' for all of it, folder under sdk/thirdparty)
 DEKO3D = [

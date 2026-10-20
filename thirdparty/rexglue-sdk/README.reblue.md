@@ -1,11 +1,18 @@
 # ReXGlue SDK, Nintendo Switch port (vendored)
 
-This folder is the ReXGlue SDK **v0.10.0** with the Nintendo Switch (Horizon,
-libnx, devkitA64) port made by the
-[nfsmw-nx](https://github.com/StevensND/nfsmw-nx) project, copied from its
-`sdk/` folder at commit `266f943` (branch `deko3d-implementation`,
-2026-10-10). re:Blue's PC builds keep using the official SDK packages; only
-the Switch build (`docs/SWITCH.md`) compiles this copy.
+This folder is the ReXGlue SDK at **nightly-20261002-bd833a2a**, the SDK build
+re:Blue v1.3.1 is made with, merged with the Nintendo Switch (Horizon, libnx,
+devkitA64) layer of the [nfsmw-nx](https://github.com/StevensND/nfsmw-nx)
+project. Only the Switch build (`docs/SWITCH.md`) compiles this copy; the PC
+builds keep using the official SDK packages.
+
+How it was made (so it can be redone against a newer SDK or nfsmw-nx):
+
+1. upstream `v0.10.0`, with nfsmw-nx's `sdk/` (commit `266f943`, branch
+   `deko3d-implementation`, 2026-10-10) copied over it as one commit;
+2. `git merge nightly-20261002-bd833a2a` (24 upstream commits after v0.10.0);
+3. conflicts resolved as in the table below; `.github`, `docs`, `tests`,
+   `scripts` and `tools` left out, as nfsmw-nx does.
 
 **License:** the SDK, including the Horizon layer nfsmw-nx added, is
 BSD-3-Clause (`LICENSE`; nfsmw-nx states this in
@@ -15,23 +22,29 @@ links keep their licenses (Mesa: MIT, FFmpeg/libmspack: LGPL-2.1).
 
 ## What is in here
 
-- Everything nfsmw-nx carries in `sdk/`: the SDK sources, its Switch layer
-  (`src/core/*_switch.cpp`, `src/ui/*switch*`, `src/audio/switch`,
-  `src/input/switch`, `cmake/rexglue_switch.cmake`, `switch_compat/`) and the
-  few third-party files it patched.
+- The SDK sources with the Switch layer (`src/core/*_switch.cpp`,
+  `src/ui/*switch*`, `src/audio/switch`, `src/input/switch`,
+  `cmake/rexglue_switch.cmake`, `switch_compat/`) and the few third-party files
+  nfsmw-nx patched (`thirdparty/FFmpeg/...`, `thirdparty/ffmpeg-overlay/`).
 - The rest of `thirdparty/` is **not** in git. `tools/switch/fetch_thirdparty.py`
-  copies it from the upstream v0.10.0 release and its submodules the first
-  time (the host stage of the build runs it); `.fetched-<commit>` marks it done.
+  copies it from the upstream nightly and its submodules the first time (the
+  host stage of the build runs it); `.fetched-<commit>` marks it done.
 
-## Changes made for re:Blue
+## Merge resolutions and re:Blue changes
 
-Keep this list current, so the copy can be brought up to a newer nfsmw-nx SDK.
+Keep this list current.
 
 | File | Change |
 |---|---|
+| `CMakeLists.txt`, `cmake/rex_version.cmake` | merge: upstream's `SOURCE_DIR` and nfsmw-nx's `NO_GIT` (in a vendored copy git sees re:Blue's tags) |
 | `CMakeLists.txt` | `REXGLUE_HOST_TOOLS_ONLY` option |
-| `resources/templates/init/rexglue_cmake.inja` | in a cross build, an empty `<title>_codegen` target (re:Blue orders its own targets after it) |
 | `thirdparty/CMakeLists.txt` | with `REXGLUE_HOST_TOOLS_ONLY`, SDL is built headless (no X11/Wayland/audio dev packages on the build machine) |
+| `include/rex/input/input_system.h` | merge: both sides' members (nfsmw-nx's refresh throttle, upstream's per-user state) |
+| `src/input/input_system.cpp` | merge: upstream's `vibration` cvar replaces nfsmw-nx's `input_vibracion`; off by default on Switch, as nfsmw-nx had it |
+| `src/core/logging.cpp` | merge: upstream's (`LogConfig`, directory budget), which re:Blue uses; nfsmw-nx's optional async logger (off by default, measured harmful) dropped |
+| `src/ui/rex_app.cpp` | merge: upstream's input gate (window focus) with nfsmw-nx's Switch rule (the menu owns the pad while it has focus) |
+| `resources/templates/init/rexglue_cmake.inja` | merge: upstream's `names.original`; in a cross build an empty `<title>_codegen` target (re:Blue orders its own targets after it) |
+| `cmake/rexglue_export_targets.cmake`, `CMakeLists.txt` | skip the targets a Switch build does not have (the code generator, the GPU plugin) when exporting the `rex::` aliases |
 
-The upstream SDK documentation for the Switch layer is in nfsmw-nx's
-`docs/` (`platform-notes.md`, `toolchain.md`, `porting-another-game.md`).
+The Switch layer's own documentation is in nfsmw-nx's `docs/`
+(`platform-notes.md`, `toolchain.md`, `porting-another-game.md`).
