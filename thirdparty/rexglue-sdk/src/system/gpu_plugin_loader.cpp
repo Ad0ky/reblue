@@ -68,13 +68,19 @@ std::unique_ptr<IGraphicsSystem> LoadGpuPlugin(std::string_view name, std::strin
 
 // A NRO cannot load code at run time: rexgpu-xenos is linked into the
 // executable, and its plugin_main.cpp entry points are called directly.
-extern "C" uint32_t rex_gpu_abi_version(void);
-extern "C" rex::system::IGraphicsSystem* rex_gpu_create(uint32_t abi_version,
-                                                         const rex::system::GpuCreateInfo* info);
+// reblue: weak, so a title with its own renderer that links no GPU plugin
+// (re:Blue draws through plume) still links; LoadGpuPlugin then finds none.
+extern "C" __attribute__((weak)) uint32_t rex_gpu_abi_version(void);
+extern "C" __attribute__((weak)) rex::system::IGraphicsSystem* rex_gpu_create(
+    uint32_t abi_version, const rex::system::GpuCreateInfo* info);
 
 namespace rex::system {
 
 std::unique_ptr<IGraphicsSystem> LoadGpuPlugin(std::string_view name, std::string_view backend) {
+  if (!rex_gpu_abi_version || !rex_gpu_create) {
+    REXSYS_ERROR("GPU plugin '{}' is not linked into this executable (no GPU plugin)", name);
+    return nullptr;
+  }
   if (name != "xenos") {
     REXSYS_ERROR("GPU plugin '{}' is not linked into this executable (only 'xenos' is)", name);
     return nullptr;

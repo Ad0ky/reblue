@@ -46,6 +46,7 @@ Keep this list current.
 | `resources/templates/init/rexglue_cmake.inja` | merge: upstream's `names.original`; in a cross build an empty `<title>_codegen` target (re:Blue orders its own targets after it) |
 | `cmake/rexglue_export_targets.cmake`, `CMakeLists.txt` | skip the targets a Switch build does not have (the code generator, the GPU plugin) when exporting the `rex::` aliases |
 | `src/ui/window_switch.cpp`, `include/rex/ui/window_switch.h` | the nightly's two-argument `Window::Create`; `GetDisplayPixelSize` returns the display mode's resolution |
+| `src/system/gpu_plugin_loader.cpp` | the statically linked GPU plugin's entry points are weak, so a title without the plugin (re:Blue, its own renderer) links |
 
 The Switch layer's own documentation is in nfsmw-nx's `docs/`
 (`platform-notes.md`, `toolchain.md`, `porting-another-game.md`).
