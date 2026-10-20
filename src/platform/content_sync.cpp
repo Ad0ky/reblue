@@ -6,6 +6,7 @@
  *            See LICENSE file in the project root for full license text.
  */
 #include "platform/content_sync.h"
+#include "core/threading.h"
 
 #include <filesystem>
 #include <fstream>
@@ -82,14 +83,14 @@ void ContentSync::Start(const std::string &url) {
 
   // Detached: the ordered exit kills the process outright, so a check still
   // waiting on the network never holds shutdown up.
-  std::thread([this, url] { Check(url); }).detach();
+  bd::DetachThread(std::thread([this, url] { Check(url); }));
 }
 
 void ContentSync::BeginFetch() {
   if (fetching_.exchange(true))
     return;
   stage_.store(Stage::kFetching);
-  std::thread([this] { Fetch(); }).detach();
+  bd::DetachThread(std::thread([this] { Fetch(); }));
 }
 
 void ContentSync::Decline() {

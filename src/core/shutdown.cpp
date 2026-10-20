@@ -63,7 +63,7 @@ template <typename F> void Stage(const char *name, F &&fn) {
 // last completed stage names what stalled.
 void ArmWatchdog(int exit_code) {
   const i32 budget_ms = bd::Settings::Get().ShutdownTimeoutMs();
-  std::thread([budget_ms, exit_code] {
+  bd::DetachThread(std::thread([budget_ms, exit_code] {
     const auto deadline = Clock::now() + std::chrono::milliseconds(budget_ms);
     while (Clock::now() < deadline) {
       if (g_finished.load(std::memory_order_acquire))
@@ -75,7 +75,7 @@ void ArmWatchdog(int exit_code) {
     BD_WARN("[shutdown] watchdog fired after {} ms, terminating", budget_ms);
     rex::FlushLogging();
     TerminateProcessNow(exit_code);
-  }).detach();
+  }));
 }
 
 std::function<void()> UiPump() {

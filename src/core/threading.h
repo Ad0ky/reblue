@@ -8,7 +8,16 @@
  */
 #pragma once
 
+#include <thread>
+
 namespace bd {
+
+// Let 't' run on its own, never joined. std::thread::detach() everywhere but
+// Nintendo Switch, where detach throws (libnx has no detached pthreads; see
+// nfsmw-nx docs/platform-notes.md): there the thread object is parked in a
+// list that is never destroyed, which is the same thing for a thread that
+// lives until the process ends. Use this instead of .detach().
+void DetachThread(std::thread &&t);
 
 void EnableHighResTimer();
 void DisableHighResTimer();

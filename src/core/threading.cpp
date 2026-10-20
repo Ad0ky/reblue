@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include "core/logging.h"
 
@@ -46,6 +47,19 @@ inline void CpuPause() { std::this_thread::yield(); }
 } // namespace
 
 namespace bd {
+
+void DetachThread(std::thread &&t) {
+#if defined(__SWITCH__)
+  // Leaked on purpose: destroying a joinable std::thread terminates, and the
+  // process ends through the applet exit without running destructors anyway.
+  static std::mutex *mutex = new std::mutex;
+  static std::vector<std::thread> *parked = new std::vector<std::thread>;
+  std::lock_guard<std::mutex> lock(*mutex);
+  parked->push_back(std::move(t));
+#else
+  t.detach();
+#endif
+}
 
 void EnableHighResTimer() {
   std::call_once(g_timer_init, [] {

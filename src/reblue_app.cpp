@@ -161,6 +161,14 @@ std::optional<std::filesystem::path> EarlyInstallRoot() {
   if (auto cfg = bd::installer::InstallConfig::Read())
     if (cfg->schema_version == bd::installer::kInstallSchemaVersion)
       return cfg->install_root;
+#if defined(__SWITCH__)
+  // No install record on the console: the NRO's folder is the install root
+  // when game/ sits beside it (OnFinalizePaths), so profiles/<name> (settings
+  // and saves) goes there too rather than into game/.
+  if (const auto root = bd::AppRootFolder();
+      std::filesystem::exists(root / "game" / "default.xex"))
+    return root;
+#endif
   return std::nullopt;
 }
 

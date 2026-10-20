@@ -111,7 +111,7 @@ void StartWorkerPool() {
     // Never joinable: a static vector of these std::terminates if the message
     // loop unwinds to main instead of exiting via TerminateProcessNow.
     for (unsigned i = 0; i < count; ++i)
-      std::thread(WorkerLoop).detach();
+      bd::DetachThread(std::thread(WorkerLoop));
     BD_DEBUG("pso_precache: started {} compiler thread(s)", count);
   });
 }

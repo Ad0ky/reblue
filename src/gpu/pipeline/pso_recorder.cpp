@@ -12,6 +12,7 @@
  *            See LICENSE file in the project root for full license text.
  */
 #include "gpu/pipeline/pso_recorder.h"
+#include "core/threading.h"
 
 #include <mutex>
 #include <rex/types.h>
@@ -346,7 +347,7 @@ void WriterLoop() {
 
 void StartWriterThread() {
   std::call_once(g_writerOnce, [] {
-    std::thread(WriterLoop).detach(); // process exit is a hard kill, never join
+    bd::DetachThread(std::thread(WriterLoop)); // process exit is a hard kill, never join
     BD_DEBUG("pso_recorder: capturing predictor misses to {}",
              CsvFilePath().string());
   });

@@ -6,6 +6,7 @@
  *            See LICENSE file in the project root for full license text.
  */
 #include "platform/updates.h"
+#include "core/threading.h"
 
 #include <algorithm>
 #include <fstream>
@@ -119,10 +120,10 @@ void Updates::BeginCheck() {
 
   // Detached: the ordered exit kills the process outright, so a check still
   // waiting on the network never holds shutdown up.
-  std::thread([this, url] {
+  bd::DetachThread(std::thread([this, url] {
     Check(url);
     checking_.store(false);
-  }).detach();
+  }));
 }
 
 u32 Updates::Generation() const { return generation_.load(); }
@@ -201,10 +202,10 @@ void Updates::BeginApply() {
   // Detached, and this singleton outlives the process: nothing that raised the
   // offer has to stay alive for the download, and quitting mid-download never
   // waits on it.
-  std::thread([this] {
+  bd::DetachThread(std::thread([this] {
     apply_result_.store(Apply());
     apply_stage_.store(ApplyStage::kDone);
-  }).detach();
+  }));
 }
 
 Updates::ApplyResult Updates::Apply() {
