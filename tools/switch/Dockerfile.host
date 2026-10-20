@@ -1,0 +1,14 @@
+# Host tools image for the Switch build's first stage (tools/switch/host-stage.sh):
+# the ReXGlue code generator and XenosRecomp are x86-64 Linux programs, built with
+# Clang 19 (the SDK needs std::expected, which libstdc++ only enables for
+# Clang 19+). The second stage cross-compiles in the switch-dev image.
+#
+#   docker build -t reblue-switch-host -f tools/switch/Dockerfile.host tools/switch
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        clang-19 cmake ninja-build git python3 ca-certificates make pkg-config \
+        libx11-xcb-dev libwayland-dev \
+ && rm -rf /var/lib/apt/lists/* \
+ && git config --system --add safe.directory '*'

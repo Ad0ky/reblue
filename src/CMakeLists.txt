@@ -41,6 +41,26 @@ set(reblue_installer_only
 list(REMOVE_ITEM reblue_all
      ${reblue_backend_only} ${reblue_d3d12_only} ${reblue_installer_only})
 
+# Nintendo Switch: there is no SDL on Horizon (libnx replaces it in the SDK),
+# so the files built on SDL dialogs and device queries give way to the ones in
+# platform/switch/. Everywhere else platform/switch/ is left out.
+set(reblue_sdl_only
+    platform/fatal_dialog.cpp
+    platform/file_dialog.cpp
+    platform/host_devices.cpp)
+set(reblue_switch_only ${reblue_all})
+list(FILTER reblue_switch_only INCLUDE REGEX "^platform/switch/")
+if(REBLUE_SWITCH)
+    list(REMOVE_ITEM reblue_all ${reblue_sdl_only})
+    # POSIX signals and dladdr: platform/switch/crash_handler_switch.cpp instead,
+    # compiled with the exe like the original (it reads the build config).
+    list(REMOVE_ITEM reblue_backend_only platform/crash_handler.cpp)
+    list(REMOVE_ITEM reblue_all platform/switch/crash_handler_switch.cpp)
+    list(APPEND reblue_backend_only platform/switch/crash_handler_switch.cpp)
+else()
+    list(REMOVE_ITEM reblue_all ${reblue_switch_only})
+endif()
+
 reblue_sources(${reblue_all})
 reblue_backend_sources(${reblue_backend_only})
 reblue_d3d12_sources(${reblue_d3d12_only})

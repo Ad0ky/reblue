@@ -7,11 +7,23 @@ include("${CMAKE_CURRENT_LIST_DIR}/shaders.cmake")
 # command line, so every commit would rebuild the whole target.
 reblue_write_build_info("${REBLUE_GEN_DIR}/core/build_info.h")
 
-reblue_shader_cache(
-    RECOMP_TARGET XenosRecomp
-    INPUT_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/assets"
-    INCLUDE_FILE  "${REBLUE_SHADER_COMMON_H}"
-    OUTPUT_CPP    "${REBLUE_GEN_DIR}/shader_cache.cpp")
+if(REBLUE_SWITCH)
+    # XenosRecomp is a host tool: tools/switch/build-switch.sh runs it before
+    # the cross build (cmake/switch.cmake).
+    if(NOT EXISTS "${REBLUE_SWITCH_SHADER_CACHE}")
+        message(FATAL_ERROR
+            "No host shader cache at ${REBLUE_SWITCH_SHADER_CACHE}. "
+            "Build through tools/switch/build-switch.sh, which makes it from assets/.")
+    endif()
+    configure_file("${REBLUE_SWITCH_SHADER_CACHE}" "${REBLUE_GEN_DIR}/shader_cache.cpp" COPYONLY)
+    add_custom_target(reblue_shader_cache_gen)
+else()
+    reblue_shader_cache(
+        RECOMP_TARGET XenosRecomp
+        INPUT_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+        INCLUDE_FILE  "${REBLUE_SHADER_COMMON_H}"
+        OUTPUT_CPP    "${REBLUE_GEN_DIR}/shader_cache.cpp")
+endif()
 set(REBLUE_GENERATED_SOURCES "${REBLUE_GEN_DIR}/shader_cache.cpp")
 
 foreach(shader IN ITEMS copy_vs bd_2d_blit_vs imgui_vs)

@@ -418,3 +418,12 @@ FodyWeavers.xsd
 *.msp
 /docs/native-renderer-followups.md
 /dist
+
+# Nintendo Switch build (docs/SWITCH.md)
+switch-build.log
+# The SDK's programs and the third-party sources tools/switch/fetch_thirdparty.py
+# copies in. The few files the Switch SDK patched stay tracked: git keeps
+# tracking a file once added, whatever this says.
+/thirdparty/rexglue-sdk/out/
+/thirdparty/rexglue-sdk/thirdparty/**
+!/thirdparty/rexglue-sdk/thirdparty/CMakeLists.txt

@@ -7,11 +7,26 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(PLUME_SDL_VULKAN_ENABLED ON CACHE BOOL "" FORCE)
 endif()
+# The SDK's subdirectory build has no rex::o1heap (only its installed package
+# exports it); the Switch build always takes the SDK from source.
+if(TARGET o1heap AND NOT TARGET rex::o1heap)
+    add_library(rex::o1heap ALIAS o1heap)
+endif()
 add_subdirectory(plume EXCLUDE_FROM_ALL)
 
-add_subdirectory(XenosRecomp EXCLUDE_FROM_ALL)
-target_compile_definitions(XenosRecomp PRIVATE REBLUE_RECOMP)
-target_precompile_headers(XenosRecomp PRIVATE <fmt/format.h>)
+if(REBLUE_SWITCH)
+    # XenosRecomp and dxc are host programs; the host stage of
+    # tools/switch/build-switch.sh runs them. Only dxc's command line is needed
+    # here, for re:Blue's own HLSL (cmake/shaders.cmake), and the vendored
+    # Linux x64 binary runs on the build machine.
+    set(_reblue_dxc_bin "${CMAKE_CURRENT_SOURCE_DIR}/XenosRecomp/thirdparty/dxc-bin")
+    set(DIRECTX_DXC_TOOL "LD_LIBRARY_PATH=${_reblue_dxc_bin}/lib/x64" "${_reblue_dxc_bin}/bin/x64/dxc-linux"
+        CACHE INTERNAL "")
+else()
+    add_subdirectory(XenosRecomp EXCLUDE_FROM_ALL)
+    target_compile_definitions(XenosRecomp PRIVATE REBLUE_RECOMP)
+    target_precompile_headers(XenosRecomp PRIVATE <fmt/format.h>)
+endif()
 
 if(NOT TARGET xxHash::xxhash)
     set(XXHASH_BUILD_XXHSUM OFF CACHE BOOL "" FORCE)

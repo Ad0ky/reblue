@@ -1,2 +1,9 @@
 # Shell scripts run inside Linux containers; CRLF makes them unexecutable.
 *.sh text eol=lf
+# Patches are applied with git apply inside Linux containers; CRLF breaks them.
+*.patch text eol=lf
+*.py text eol=lf
+Dockerfile.* text eol=lf
+# cmd.exe mis-parses labels in LF-only batch files.
+*.bat text eol=crlf
+*.ps1 text eol=crlf

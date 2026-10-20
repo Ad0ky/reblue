@@ -8,6 +8,15 @@ project(reblue VERSION 1.3.1 LANGUAGES C CXX)
 
 include(CMakeDependentOption)
 
+# Nintendo Switch (Horizon homebrew). cmake/toolchains/switch-devkitA64.cmake
+# sets REXGLUE_PLATFORM_SWITCH; the build runs through tools/switch/build-switch.sh.
+# See docs/SWITCH.md.
+set(REBLUE_SWITCH OFF)
+if(REXGLUE_PLATFORM_SWITCH)
+    set(REBLUE_SWITCH ON)
+    include(cmake/switch.cmake)
+endif()
+
 cmake_dependent_option(REBLUE_D3D12
     "Build the D3D12 renderer backend (OFF selects Vulkan)" ON "WIN32" OFF)
 cmake_dependent_option(REBLUE_VULKAN_EXE
@@ -113,7 +122,7 @@ endif()
 # The update check speaks HTTPS: WinHTTP on Windows, libcurl elsewhere. Only
 # the headers are a build dependency, since http.cpp dlopens the library. A
 # build with no endpoint to ask may go without them.
-if(NOT WIN32)
+if(NOT WIN32 AND NOT REBLUE_SWITCH)
     find_package(CURL QUIET)
     if(NOT CURL_FOUND)
         if(REBLUE_UPDATE_BASE)
@@ -156,7 +165,7 @@ foreach(target IN LISTS REBLUE_COMMON_TARGETS REBLUE_TARGETS)
         $<${REBLUE_PROFILING_ON}:rex::TracyClient>)
 
     # platform/http.cpp is shared, so this has to reach the object library too.
-    if(NOT WIN32 AND CURL_FOUND)
+    if(NOT WIN32 AND NOT REBLUE_SWITCH AND CURL_FOUND)
         # Config mode sets the target, module mode the variable.
         if(TARGET CURL::libcurl)
             target_include_directories(${target} PRIVATE
@@ -166,6 +175,14 @@ foreach(target IN LISTS REBLUE_COMMON_TARGETS REBLUE_TARGETS)
         endif()
         target_link_libraries(${target} PRIVATE ${CMAKE_DL_LIBS})
         target_compile_definitions(${target} PRIVATE REBLUE_HAVE_CURL)
+    endif()
+
+    # The SDK built from source (the Switch build) links imgui into rexruntime
+    # privately, so its headers, which rex/ui/*.h include, do not reach here.
+    # The installed SDK package carries them in its own include directory.
+    if(TARGET imgui)
+        target_include_directories(${target} PRIVATE
+            $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
     endif()
 
     if(REBLUE_PCH)
@@ -244,6 +261,11 @@ foreach(target IN LISTS REBLUE_VULKAN_TARGETS)
             "-framework IOKit"
             "-framework IOSurface"
             "-framework CoreGraphics")
+    elseif(REBLUE_SWITCH)
+        # plume reaches the statically linked Mesa NVK through its ICD entry
+        # points (tools/switch/patches/plume-switch.patch); the SDK links NVK
+        # into the title (rex::switch_gpu, rexglue_switch_configure_target).
+        target_compile_definitions(${target} PRIVATE REBLUE_SWITCH=1)
     else()
         # plume builds the surface through SDL3, which dlopen's the X11 or Wayland
         # client libraries itself, so nothing here links a window system.
@@ -256,7 +278,7 @@ endforeach()
 # nothing populates the $ORIGIN rpath it sets on UNIX, so librexruntime and
 # libTracyClient link but fail to load. These two are the only SHARED IMPORTED
 # targets reblue links.
-if(UNIX)
+if(UNIX AND NOT REBLUE_SWITCH)
     foreach(target IN LISTS REBLUE_TARGETS)
         add_custom_command(TARGET ${target} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -322,3 +344,17 @@ ${reblue_retired_files_cxx}
 list(JOIN reblue_program_files "\n" reblue_program_files_txt)
 file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/packaging/program_files.txt"
      CONTENT "${reblue_program_files_txt}\n$<${REBLUE_PROFILING_ON}:${reblue_tracy}\n>")
+
+# Nintendo Switch: reblue.nro next to the ELF (cmake/switch.cmake). On the SD
+# card it goes in sdmc:/switch/reblue/ with the game/ folder beside it.
+if(REBLUE_SWITCH AND NOT REBLUE_SWITCH_CHECK_ONLY)
+    set(reblue_nro_icon "")
+    if(EXISTS "${REBLUE_SWITCH_APP_ICON}")
+        set(reblue_nro_icon ICON "${REBLUE_SWITCH_APP_ICON}")
+    endif()
+    rexglue_switch_add_nro(reblue
+        NAME "${REBLUE_SWITCH_APP_TITLE}"
+        AUTHOR "${REBLUE_SWITCH_APP_AUTHOR}"
+        VERSION "${PROJECT_VERSION}"
+        ${reblue_nro_icon})
+endif()

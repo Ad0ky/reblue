@@ -114,6 +114,11 @@ endmacro()
 # codegen, including one a project assembles itself rather than taking the
 # library rexglue_setup_target() builds. The stamp comes first: the DEPFILE
 # names it.
+#
+# A cross build (Nintendo Switch) has no rexglue it could run: the tool is a
+# host program. There the generated sources must already exist, produced by
+# running codegen with a host SDK.
+if(TARGET rex::rexglue)
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/generated/codegen.build.stamp"
            ${REXGLUE_ENTRYPOINT_GENERATED_SOURCES}
@@ -125,6 +130,16 @@ add_custom_command(
 )
 add_custom_target(reblue_codegen
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generated/codegen.build.stamp")
+else()
+    if(NOT REXGLUE_ENTRYPOINT_GENERATED_SOURCES)
+        message(FATAL_ERROR
+            "No generated sources in generated and no rexglue to produce them "
+            "(cross build). Run 'rexglue codegen reblue_manifest.toml' with a host SDK first.")
+    endif()
+    # reblue: an empty target in a cross build, so the add_dependencies above
+    # and any the title makes itself still configure.
+    add_custom_target(reblue_codegen)
+endif()
 
 # Include DLL module shared library targets if codegen has generated them
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/generated/dll_targets.cmake")
