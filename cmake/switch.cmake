@@ -43,12 +43,13 @@ set(REBLUE_SWITCH_DATA_ROOT "/switch/reblue" CACHE STRING
 add_compile_definitions(REBLUE_SWITCH_DATA_ROOT="${REBLUE_SWITCH_DATA_ROOT}")
 
 # Code generation (the same experiments as nfsmw-nx; see its docs/toolchain.md).
+# LTO on the recompiled game code and re:Blue's own (not the SDK libraries),
+# applied in the top-level CMakeLists.txt once those targets exist. Together
+# with the direct calls (tools/switch/direct_calls.py, host stage) the compiler
+# can inline small game functions across files. The whole-program step reads
+# ~110 MB of generated C++; nfsmw-nx's 144 MB fit in 16 GB with 2 jobs.
 option(REBLUE_SWITCH_LTO "Link-time optimisation (needs a lot of RAM on the build machine)" OFF)
 set(REBLUE_SWITCH_LTO_JOBS "2" CACHE STRING "Parallel LTRANS jobs for the LTO link")
-if(REBLUE_SWITCH_LTO)
-    add_compile_options(-flto -fno-fat-lto-objects)
-    add_link_options(-flto=${REBLUE_SWITCH_LTO_JOBS} -flto-partition=balanced)
-endif()
 
 # Development check build (cmake/toolchains/switch-check.cmake): compiles the
 # Switch code paths with a stock aarch64 Linux GCC and the libnx headers,

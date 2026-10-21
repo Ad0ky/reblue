@@ -352,6 +352,15 @@ if(REBLUE_SWITCH AND NOT REBLUE_SWITCH_CHECK_ONLY)
     if(EXISTS "${REBLUE_SWITCH_APP_ICON}")
         set(reblue_nro_icon ICON "${REBLUE_SWITCH_APP_ICON}")
     endif()
+    if(REBLUE_SWITCH_LTO)
+        foreach(_lto_target reblue_recomp reblue_common reblue)
+            if(TARGET ${_lto_target})
+                target_compile_options(${_lto_target} PRIVATE -flto -fno-fat-lto-objects)
+            endif()
+        endforeach()
+        target_link_options(reblue PRIVATE -flto=${REBLUE_SWITCH_LTO_JOBS} -flto-partition=balanced)
+        message(STATUS "reblue: LTO on the game code and re:Blue (${REBLUE_SWITCH_LTO_JOBS} jobs)")
+    endif()
     rexglue_switch_add_nro(reblue
         NAME "${REBLUE_SWITCH_APP_TITLE}"
         AUTHOR "${REBLUE_SWITCH_APP_AUTHOR}"

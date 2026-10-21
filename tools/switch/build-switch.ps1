@@ -16,7 +16,11 @@ param(
     [string]$HostImage = "reblue-switch-host",
     [int]$Jobs = 0,
     [ValidateSet("Release", "RelWithDebInfo")][string]$BuildType = "Release",
-    [switch]$Clean
+    [switch]$Clean,
+    # Link-time optimisation of the game code: faster game, slow link, ~16 GB of RAM for Docker.
+    [switch]$Lto,
+    # Plain calls between recompiled functions (undoes tools/switch/direct_calls.py).
+    [switch]$NoDirectCalls
 )
 # Continue, not Stop: Windows PowerShell 5.1 turns a native program's redirected
 # stderr line into a terminating error. Every docker call checks its exit code.
@@ -71,6 +75,8 @@ Write-Host "Switch image: $SwitchImage"
 $envArgs = @("-e", "BUILD_TYPE=$BuildType")
 if ($Jobs -gt 0) { $envArgs += @("-e", "JOBS=$Jobs") }
 if ($Clean) { $envArgs += @("-e", "CLEAN=1") }
+if ($Lto) { $envArgs += @("-e", "LTO=1") }
+if ($NoDirectCalls) { $envArgs += @("-e", "DIRECT_CALLS=0") }
 
 # ---------------------------------------------------------------- stages
 Write-Host ""

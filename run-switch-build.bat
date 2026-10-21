@@ -15,11 +15,15 @@ if errorlevel 1 (echo RESULT: Docker is not installed. >> switch-build.log & ech
 docker info > nul 2>&1
 if errorlevel 1 (echo RESULT: Docker Desktop is not running. Start it and try again. >> switch-build.log & echo Docker Desktop is not running. & goto end)
 
+rem Options after the game folder (or alone) go to build-switch.ps1, e.g.
+rem   run-switch-build.bat -Lto        link-time optimisation (~16 GB RAM for Docker)
+rem   run-switch-build.bat D:\Games\reblue\game -Lto
 set GAMEARG=
-if not "%~1"=="" set GAMEARG=-Game "%~1"
+set FIRST=%~1
+if not "%FIRST%"=="" if not "%FIRST:~0,1%"=="-" (set GAMEARG=-Game "%~1" & shift)
 
 echo Building re:Blue for Switch... (progress in switch-build.log)
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\switch\build-switch.ps1 %GAMEARG% >> switch-build.log 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\switch\build-switch.ps1 %GAMEARG% %1 %2 %3 >> switch-build.log 2>&1
 set BUILDRC=%errorlevel%
 echo RESULT: build exit code %BUILDRC% >> switch-build.log
 if not "%BUILDRC%"=="0" (echo Build FAILED, see switch-build.log & goto end)

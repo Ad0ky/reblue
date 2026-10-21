@@ -106,6 +106,15 @@ else
 fi
 [ -f generated/sources.cmake ] || die "codegen wrote no generated/sources.cmake"
 
+# Every run, not only after codegen: a hook added to the sources turns its call
+# sites back into plain calls. DIRECT_CALLS=0 restores all plain calls.
+log "Direct calls (tools/switch/direct_calls.py)"
+if [ "${DIRECT_CALLS:-1}" = 0 ]; then
+    python3 tools/switch/direct_calls.py "$root" --undo
+else
+    python3 tools/switch/direct_calls.py "$root"
+fi
+
 # ---------------------------------------------------------------- shaders
 log "Host XenosRecomp"
 cmake -S thirdparty/XenosRecomp -B "$host/xenos" -G Ninja \

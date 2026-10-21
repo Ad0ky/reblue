@@ -11,6 +11,7 @@
  */
 #include "gpu/frame.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -27,9 +28,80 @@
 #include "gpu/output.h"
 #include "gpu/settings.h"
 
+#if defined(__SWITCH__)
+// The SDK's Switch profiler counts presented frames through this (its
+// "juego N fps" column and the console overlays). re:Blue has its own
+// renderer, so it reports them itself.
+extern "C" void RexSwitchPerfCount(unsigned id);
+#endif
+
 namespace bd::gpu {
 
 namespace {
+
+#if defined(__SWITCH__)
+// Frame timing on the console, logged every 10 s: where each frame's time goes
+// between two presents. "GPU wait" is the wait for the fence of the frame slot
+// being reused (the GPU still busy with an older frame), "pacing" the frame
+// limiter, "acquire+present" the swapchain calls, and the rest is CPU work on
+// the game and render threads before the present.
+class FrameStats {
+public:
+  using Clock = std::chrono::steady_clock;
+
+  void Present(double acquire_ms, double present_ms, double fence_ms, double pace_ms) {
+    const Clock::time_point now = Clock::now();
+    if (started_) {
+      const double frame_ms = Ms(last_, now);
+      ++frames_;
+      total_ms_ += frame_ms;
+      worst_ms_ = std::max(worst_ms_, frame_ms);
+      if (frame_ms > 34.0) ++over_33_;
+      if (frame_ms > 50.0) ++over_50_;
+      if (frame_ms > 100.0) ++over_100_;
+      acquire_ms_ += acquire_ms;
+      present_ms_ += present_ms;
+      fence_ms_ += fence_ms;
+      pace_ms_ += pace_ms;
+    } else {
+      started_ = true;
+      window_ = now;
+    }
+    last_ = now;
+    const double window_ms = Ms(window_, now);
+    if (window_ms >= 10000.0 && frames_ > 0) {
+      const double n = double(frames_);
+      const double cpu =
+          std::max(0.0, (total_ms_ - acquire_ms_ - present_ms_ - fence_ms_ - pace_ms_) / n);
+      BD_INFO("[frames] {:.1f} s: {:.1f} fps, frame {:.1f} ms (worst {:.0f}) | per frame: GPU wait "
+              "{:.1f} ms, acquire+present {:.1f} ms, pacing {:.1f} ms, CPU {:.1f} ms | frames over "
+              "33 ms {}, 50 ms {}, 100 ms {}",
+              window_ms / 1000.0, n * 1000.0 / window_ms, total_ms_ / n, worst_ms_, fence_ms_ / n,
+              (acquire_ms_ + present_ms_) / n, pace_ms_ / n, cpu, over_33_, over_50_, over_100_);
+      frames_ = over_33_ = over_50_ = over_100_ = 0;
+      total_ms_ = worst_ms_ = acquire_ms_ = present_ms_ = fence_ms_ = pace_ms_ = 0;
+      window_ = now;
+    }
+  }
+
+  static double Ms(Clock::time_point a, Clock::time_point b) {
+    return std::chrono::duration<double, std::milli>(b - a).count();
+  }
+
+private:
+  bool started_ = false;
+  Clock::time_point last_{};
+  Clock::time_point window_{};
+  u64 frames_ = 0, over_33_ = 0, over_50_ = 0, over_100_ = 0;
+  double total_ms_ = 0, worst_ms_ = 0, acquire_ms_ = 0, present_ms_ = 0, fence_ms_ = 0, pace_ms_ = 0;
+};
+
+// Only the presenting thread touches it, under the video state's mutex or right after.
+FrameStats &Stats() {
+  static FrameStats stats;
+  return stats;
+}
+#endif
 
 void ApplyVsync(VideoState &s) {
   if (s.swap_chain) {
@@ -245,6 +317,9 @@ void Video::Present(GuestTexture *frontBuffer) {
   }
 
   u32 texture_index = 0;
+#if defined(__SWITCH__)
+  const auto t_acquire = FrameStats::Clock::now();
+#endif
   {
     BD_CPU_ZONE("AcquireTexture");
     if (!s.swap_chain->acquireTexture(
@@ -263,6 +338,9 @@ void Video::Present(GuestTexture *frontBuffer) {
     }
   }
 
+#if defined(__SWITCH__)
+  const double acquire_ms = FrameStats::Ms(t_acquire, FrameStats::Clock::now());
+#endif
   plume::RenderTexture *back = s.swap_chain->getTexture(texture_index);
   plume::RenderFramebuffer *back_fb = s.framebuffers[texture_index].get();
 
@@ -299,6 +377,9 @@ void Video::Present(GuestTexture *frontBuffer) {
   }
   s.command_list_submitted[cur] = true;
   ApplyVsync(s);
+#if defined(__SWITCH__)
+  const auto t_present = FrameStats::Clock::now();
+#endif
   {
     BD_CPU_ZONE("PresentSwap");
     if (!s.swap_chain->present(texture_index, signals, 1)) {
@@ -306,10 +387,16 @@ void Video::Present(GuestTexture *frontBuffer) {
         s.resize_requested.store(true, std::memory_order_release);
     }
   }
+#if defined(__SWITCH__)
+  const auto t_fence = FrameStats::Clock::now();
+#endif
   {
     BD_CPU_ZONE("WaitFence");
     AdvanceAndWaitReused(s);
   }
+#if defined(__SWITCH__)
+  const auto t_fence_end = FrameStats::Clock::now();
+#endif
   const u32 reclaimed = s.frame.load(std::memory_order_relaxed);
   s.frame_present_committed = true;
   BD_FRAME_MARK();
@@ -319,10 +406,19 @@ void Video::Present(GuestTexture *frontBuffer) {
     BD_CPU_ZONE("DrainSlot");
     DrainSlot(s, reclaimed);
   }
+#if defined(__SWITCH__)
+  const auto t_pace = FrameStats::Clock::now();
+#endif
   {
     BD_CPU_ZONE("PaceFrame");
     PaceFrame();
   }
+#if defined(__SWITCH__)
+  const auto t_end = FrameStats::Clock::now();
+  RexSwitchPerfCount(0);
+  Stats().Present(acquire_ms, FrameStats::Ms(t_present, t_fence), FrameStats::Ms(t_fence, t_fence_end),
+                  FrameStats::Ms(t_pace, t_end));
+#endif
 }
 
 void Video::SkipPresent() {

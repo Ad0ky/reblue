@@ -11,6 +11,8 @@
 #                      job for the recompiled code, lower it if the container
 #                      runs out of memory)
 #   BUILD_TYPE=...     Release (default) or RelWithDebInfo
+#   LTO=1              link-time optimisation of the game code (slow link, ~16 GB
+#                      of RAM for Docker)
 #   NVK_SDK=path       portlibs/switch folder holding mesa-switch's lib/libvulkan.a
 #                      (default: searched under $DEVKITPRO)
 #   CLEAN=1            delete the Switch build folder first
@@ -22,6 +24,7 @@ cd "$root"
 export DEVKITPRO
 JOBS="${JOBS:-$(nproc)}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
+LTO="${LTO:-0}"
 build="$root/out/switch-build"
 
 log() { printf '\n==== %s ====\n' "$*"; }
@@ -54,7 +57,8 @@ cmake -S . -B "$build" -G Ninja \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     -DCMAKE_CXX_SCAN_FOR_MODULES=OFF \
     -DDEVKITPRO="$DEVKITPRO" \
-    -DREXGLUE_SWITCH_NVK_SDK="$NVK_SDK"
+    -DREXGLUE_SWITCH_NVK_SDK="$NVK_SDK" \
+    -DREBLUE_SWITCH_LTO="$([ "$LTO" = 1 ] && echo ON || echo OFF)"
 
 log "Build ($JOBS jobs)"
 # -k 0: keep going after a failure so one run reports every failing file.

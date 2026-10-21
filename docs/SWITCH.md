@@ -113,6 +113,30 @@ The SDK also writes `stderr`/abort reports beside the NRO (nfsmw-nx's
 | Exit | the applet exit, not `_Exit` (`core/threading.cpp`) |
 | Not on Switch | installer, updater and content downloads, D3D12, Tracy, mouse and keyboard, file dialogs |
 
+## Performance
+
+What the build does already:
+
+- **Direct calls.** The host stage runs `tools/switch/direct_calls.py` on the
+  recompiled code: calls to game functions that have no hook go straight to
+  `__imp__NAME`, which the compiler can inline (a call to the hookable weak
+  alias cannot be). Every run re-checks the hooks, so a hook added later gets
+  its plain calls back. `-NoDirectCalls` turns it off.
+- **LTO** (`run-switch-build.bat -Lto`): link-time optimisation of the game code
+  and re:Blue (not the SDK). Faster code, a much slower link, and about 16 GB of
+  RAM for Docker (Docker Desktop, Settings, Resources).
+
+How to measure on the console:
+
+- The game log (`logs/`) gets a `[frames]` line every 10 s: fps, mean and worst
+  frame time, and per frame the time waiting for the GPU, in the swapchain, in
+  the frame limiter and the rest (CPU). Frames over 33/50/100 ms are counted.
+- `logs/rex/rex_perfil.log` (the SDK profiler) has CPU per thread every 10 s.
+  For where each thread spends its time, create an empty file
+  `sdmc:/switch/reblue/logs/rex/perfil_pilas.flag`: the profiler then samples
+  the stacks every 1 ms (the game runs a little slower while it does). Keep the
+  matching `reblue.elf` to read the addresses.
+
 ## Known gaps
 
 - Boots to the first frames on a console; not played further yet.
