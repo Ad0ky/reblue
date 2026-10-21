@@ -56,6 +56,14 @@ if(REBLUE_VULKAN_TARGETS)
         XenosRecomp/thirdparty/smol-v/source/smolv.cpp)
 endif()
 
+if(REBLUE_SWITCH)
+    # One stb_image in the NRO: the SDK's rexui compiles it too (PNG only, as
+    # here), and --allow-multiple-definition would merge the two silently.
+    get_target_property(_reblue_tp_sources reblue_thirdparty SOURCES)
+    list(REMOVE_ITEM _reblue_tp_sources stb/stb_image.cpp)
+    set_property(TARGET reblue_thirdparty PROPERTY SOURCES ${_reblue_tp_sources})
+endif()
+
 target_include_directories(reblue_thirdparty PUBLIC
     miniz
     picosha2

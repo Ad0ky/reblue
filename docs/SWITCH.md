@@ -105,6 +105,7 @@ The SDK also writes `stderr`/abort reports beside the NRO (nfsmw-nx's
 | Code generation | host `rexglue codegen` in stage 1; the cross build uses `generated/` as is (`generated/rexglue.cmake`) |
 | Graphics | re:Blue's renderer on plume Vulkan, Mesa NVK linked statically, `VK_NN_vi_surface` on the default `NWindow` (`tools/switch/patches/plume-switch.patch`, `volk-switch.patch`, from the Lost Odyssey port) |
 | GPU memory | one VMA, the SDK's (3.3.0, built into its UI library); plume skips its own copy on Switch and uses the SDK's header. Everything links into one image with `--allow-multiple-definition` (needed for NVK's Rust libraries), so a second VMA of another version would be merged silently and break at run time |
+| Duplicate symbols | the link allows multiple definitions and keeps the first, silently. Checked: SDK export stubs are weak on Switch (the game's own D3D/XAPI code wins); stb_image is compiled once (the SDK's) |
 | Game shaders | the SPIR-V cache XenosRecomp makes on the host; there is no shader compiler on the console |
 | Paths | the NRO's folder is the install root: `game/` beside it is used as a portable install (`reblue_app.cpp`, `core/app_root.cpp`) |
 | Dialogs | the system error applet; no file dialogs (`platform/switch/dialogs_switch.cpp`) |

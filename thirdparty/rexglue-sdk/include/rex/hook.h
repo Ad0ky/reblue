@@ -68,17 +68,40 @@
     ctx.r3.u64 = (value);                                                                 \
   }
 
+// Export stubs are placeholders for imports a title may instead carry as its
+// own recompiled code (D3D, XAPI). On PC the title's definition takes
+// precedence. On Switch the whole title links statically into one image with
+// --allow-multiple-definition, where the first definition seen wins whatever
+// its strength, so there the stubs are weak and lose to the title's strong
+// definition (otherwise e.g. the D3D shader-constant setters became stubs).
+#if defined(__SWITCH__)
+#define REX_EXPORT_STUB_DEF(subroutine)   \
+  extern "C" __attribute__((weak)) REX_FUNC(subroutine) { \
+    (void)base;                           \
+    REXKRNL_WARN("{} STUB", #subroutine); \
+  }
+#define REX_EXPORT_STUB_RETURN_DEF(subroutine, value)                                     \
+  extern "C" __attribute__((weak)) REX_FUNC(subroutine) {                                 \
+    (void)base;                                                                           \
+    REXKRNL_WARN("{} STUB - returning {:#x}", #subroutine, static_cast<uint32_t>(value)); \
+    ctx.r3.u64 = (value);                                                                 \
+  }
+#else
+#define REX_EXPORT_STUB_DEF(subroutine) REX_STUB(subroutine)
+#define REX_EXPORT_STUB_RETURN_DEF(subroutine, value) REX_STUB_RETURN(subroutine, value)
+#endif
+
 // Export: hook + register in global registry for kernel ordinal lookup.
 #define REX_EXPORT(name, function) \
   REX_HOOK(name, function)         \
   static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_##name(#name, &name);
 
 #define REX_EXPORT_STUB(name) \
-  REX_STUB(name)              \
+  REX_EXPORT_STUB_DEF(name)   \
   static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_##name(#name, &name);
 
 #define REX_EXPORT_STUB_RETURN(name, retval) \
-  REX_STUB_RETURN(name, retval)              \
+  REX_EXPORT_STUB_RETURN_DEF(name, retval)   \
   static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_##name(#name, &name);
 
 namespace rex {
