@@ -19,8 +19,12 @@ rem Options after the game folder (or alone) go to build-switch.ps1, e.g.
 rem   run-switch-build.bat -Lto        link-time optimisation (~16 GB RAM for Docker)
 rem   run-switch-build.bat D:\Games\reblue\game -Lto
 set GAMEARG=
-set FIRST=%~1
-if not "%FIRST%"=="" if not "%FIRST:~0,1%"=="-" (set GAMEARG=-Game "%~1" & shift)
+if "%~1"=="" goto args_done
+set "FIRST=%~1"
+if "%FIRST:~0,1%"=="-" goto args_done
+set GAMEARG=-Game "%~1"
+shift
+:args_done
 
 echo Building re:Blue for Switch... (progress in switch-build.log)
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\switch\build-switch.ps1 %GAMEARG% %1 %2 %3 >> switch-build.log 2>&1
