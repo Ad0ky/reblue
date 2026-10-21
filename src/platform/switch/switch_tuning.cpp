@@ -77,4 +77,17 @@ bool SwitchHandheldRenderSize(u32 &w, u32 &h) {
   return true;
 }
 
+void SpreadCurrentThread(int core) {
+  u64 mask = 0;
+  if (R_FAILED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) ||
+      mask == 0)
+    return;
+  if (core < 0 || (mask & (u64(1) << core)) == 0)
+    core = __builtin_ctzll(mask);
+  const Result rc = svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, mask);
+  if (R_FAILED(rc))
+    BD_WARN("Switch: svcSetThreadCoreMask(core {}, mask {:#x}) failed: {:#x}",
+            core, mask, rc);
+}
+
 } // namespace bd::platform

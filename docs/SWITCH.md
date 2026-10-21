@@ -132,7 +132,19 @@ What the build does already:
   touched.
 - **960x540 in handheld mode.** The game renders at 960x540 and the frame is
   scaled to the screen. `bd_switch_handheld_height` = 720 or 0 renders at the
-  full 1280x720. Docked renders at the display size.
+  full 1280x720. Docked renders at the display size. The views BD sizes from
+  its 1280x720 design canvas (the field's depth-of-field view, event views)
+  are scaled down with it; on the PC they are only ever scaled up.
+- **Native movies.** The cutscene movies (`.sfd`: MPEG-1 720p video and ADX
+  audio) are decoded on a host thread with FFmpeg's MPEG-1 decoder, NEON
+  included (`src/engine/movie/`). The game's own CRI player still reads the
+  file, plays the audio and keeps the timing; only its slice decoding, which
+  took more than a whole core, is skipped, and each frame buffer is filled
+  from FFmpeg right before the game copies it into its textures. The first
+  frame of every movie is decoded both ways and compared before skipping
+  starts; the log says `native movie: ... matches the game's` and, at the
+  end, how many frames came from FFmpeg. Any mismatch or failure leaves that
+  movie to the game's decoder. `bd_native_movies = false` turns it off.
 - **Pipeline cache.** `cache/vulkan_pipelines.bin` beside the NRO keeps every
   Vulkan pipeline built so far (each one costs ~60 ms to build on NVK). The
   first run builds them, later runs read them. Delete the file to start over.
@@ -156,5 +168,4 @@ How to measure on the console:
 - Boots to the first frames on a console; not played further yet.
 - Shift-JIS conversion: newlib has no iconv, so non-ASCII text in guest debug
   prints and in mod rows added to game tables becomes `?`.
-- No performance work yet (nfsmw-nx's direct calls, LTO/PGO, function ordering,
-  patched NVK).
+- Performance work still open: PGO, function ordering, patched NVK.

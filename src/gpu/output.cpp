@@ -106,6 +106,18 @@ double Output::RenderDensity() {
   return std::max(1.0, h / static_cast<double>(kDesignCanvasHeight));
 }
 
+double Output::ViewScale() {
+#if defined(__SWITCH__)
+  u32 w = 0;
+  u32 h = 0;
+  if (!RenderSize(w, h))
+    return 1.0;
+  return std::clamp(h / static_cast<double>(kDesignCanvasHeight), 0.25, 16.0);
+#else
+  return RenderDensity();
+#endif
+}
+
 double Output::ConfiguredAspect() {
   switch (static_cast<AspectMode>(Settings::Get().AspectRatio())) {
   case AspectMode::Standard:

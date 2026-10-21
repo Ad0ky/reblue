@@ -48,6 +48,7 @@ Keep this list current.
 | `src/ui/window_switch.cpp`, `include/rex/ui/window_switch.h` | the nightly's two-argument `Window::Create`; `GetDisplayPixelSize` returns the display mode's resolution |
 | `include/rex/hook.h` | on Switch, `REX_EXPORT_STUB`/`REX_EXPORT_STUB_RETURN` are weak, so a title's own recompiled function of the same name wins as on PC (the one-image link with `--allow-multiple-definition` otherwise keeps whichever comes first) |
 | `src/core/guest_memory_switch.cpp`, `.h`, `memory_switch.cpp` | guest memory is committed in whole 2 MB blocks (128 KB commits ran the kernel out of memory blocks, 0xCE01, at ~630 MB); a failed commit also logs the process's memory-block count and system resource use |
+| `thirdparty/FFmpeg/config.h`, `config_reblue_mpeg1.h`, `thirdparty/ffmpeg-overlay/codec_list.c`, `thirdparty/CMakeLists.txt` | FFmpeg's MPEG-1 video decoder (`mpeg12dec.c`, `mpeg12.c`, `mpeg12data.c`) for Blue Dragon's Sofdec cutscenes; everything it uses is already built for nfsmw-nx's WMV3 |
 | `src/system/gpu_plugin_loader.cpp` | the statically linked GPU plugin's entry points are weak, so a title without the plugin (re:Blue, its own renderer) links |
 
 The Switch layer's own documentation is in nfsmw-nx's `docs/`

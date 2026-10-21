@@ -137,6 +137,8 @@ endif()
 
 rexglue_apply_target_settings(reblue_common)
 target_link_libraries(reblue_common PRIVATE rex::runtime)
+# engine/movie/sfd_video.cpp: the cutscene video, decoded with the SDK's FFmpeg.
+target_link_libraries(reblue_common PRIVATE libavcodec libavutil)
 # gpu/backend.h and gpu/gpu_profiling.h #error on this.
 target_compile_definitions(reblue_common PRIVATE REBLUE_COMMON_TU)
 # The hooks include the codegen-emitted reblue_funcs.h.

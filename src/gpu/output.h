@@ -41,6 +41,13 @@ public:
 
   static double RenderDensity();
 
+  // What the views BD sizes from the design canvas (the scene view, the
+  // field's depth-of-field view, event views) are scaled by. RenderDensity,
+  // and on the Switch also below 1: the 960x540 handheld render would
+  // otherwise still draw the field scene into 1280x720 views (two thirds of
+  // the GPU time of a frame there).
+  static double ViewScale();
+
   // The ratio bd_aspect_ratio asks for, or 0 to take whatever the window is.
   static double ConfiguredAspect();
 

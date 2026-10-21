@@ -437,6 +437,7 @@ endif()
 # FFmpeg - Audio/video codec library (for XMA decoding)
 # Only builds libavutil and libavcodec needed for WMA Pro decoding
 # NFSMW: also the WMV3 decoder for the cutscenes (config_nfsmw_wmv3.h)
+# re:Blue: and the MPEG-1 video decoder for the Sofdec movies (config_reblue_mpeg1.h)
 # =============================================================================
 
 set(FFMPEG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/FFmpeg")
@@ -712,6 +713,11 @@ add_library(libavcodec STATIC
     ${FFMPEG_DIR}/libavcodec/videodsp.c
     ${FFMPEG_DIR}/libavcodec/pixblockdsp.c
     ${FFMPEG_DIR}/libavcodec/startcode.c
+    # re:Blue: MPEG-1 video for Blue Dragon's Sofdec cutscenes
+    # (config_reblue_mpeg1.h). The rest of what it uses is built for WMV3.
+    ${FFMPEG_DIR}/libavcodec/mpeg12dec.c
+    ${FFMPEG_DIR}/libavcodec/mpeg12.c
+    ${FFMPEG_DIR}/libavcodec/mpeg12data.c
 )
 
 # Windows-specific source

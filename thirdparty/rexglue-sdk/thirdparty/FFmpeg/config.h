@@ -32,3 +32,6 @@
 
 /* NFSMW: components of the cutscene WMV3 decoder. */
 #include "config_nfsmw_wmv3.h"
+
+/* re:Blue: MPEG-1 video for the Sofdec cutscenes. */
+#include "config_reblue_mpeg1.h"

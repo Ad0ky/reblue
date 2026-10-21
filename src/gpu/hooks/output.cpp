@@ -93,8 +93,8 @@ void WriteGuestOutputDims(u32 w, u32 h) {
 bool ScaleDesignDims(f64 &w, f64 &h) {
   if (w > kDesignCanvasWidth || h > kDesignCanvasHeight)
     return false;
-  const f64 s = Output::RenderDensity();
-  if (s <= 1.0)
+  const f64 s = Output::ViewScale();
+  if (s == 1.0)
     return false;
   w *= s;
   h *= s;

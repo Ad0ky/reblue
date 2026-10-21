@@ -21,9 +21,15 @@ void ApplySwitchClocks();
 // bd_switch_handheld_height is set (540 by default): false docked, or when it is
 // 0. The swapchain stays at the display size and the frame is scaled to it.
 bool SwitchHandheldRenderSize(u32 &w, u32 &h);
+
+// For a host worker thread (the movie decoder): lets the calling thread run
+// on every core of the process, starting on 'core'. A thread made with
+// std::thread on Horizon is otherwise confined to the core it was created on.
+void SpreadCurrentThread(int core);
 #else
 inline void ApplySwitchClocks() {}
 inline bool SwitchHandheldRenderSize(u32 &, u32 &) { return false; }
+inline void SpreadCurrentThread(int) {}
 #endif
 
 } // namespace bd::platform
