@@ -47,6 +47,7 @@
 #include "gpu/gpu.h"
 #include "installer/installer.h"
 #include "platform/platform.h"
+#include "platform/switch_tuning.h"
 #include "vfs/vfs.h"
 
 #ifdef REBLUE_BUILD_INSTALLER
@@ -275,6 +276,9 @@ void ReblueApp::OnPostInitLogging() {
 
   bd::engine::Achievements::Init();
   bd::engine::Gimmicks::Get().Init();
+
+  // Switch: the handheld GPU profile (460.8 MHz), once the config is loaded.
+  bd::platform::ApplySwitchClocks();
 
   // Devmode aims dumps and captures at the game folder, which the SDK mounts
   // read-only. Runtime::SetupVfs reads this flag once, after this hook. Moving

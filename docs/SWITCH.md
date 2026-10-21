@@ -126,11 +126,25 @@ What the build does already:
   and re:Blue (not the SDK). Faster code, a much slower link, and about 16 GB of
   RAM for Docker (Docker Desktop, Settings, Resources).
 
+- **Handheld GPU profile.** At start re:Blue asks the system for the official
+  460.8 MHz handheld GPU profile (memory stays at 1331.2 MHz); the default is
+  307.2 MHz. `bd_switch_gpu_mhz` (0, 384 or 460) changes it; docked is never
+  touched.
+- **960x540 in handheld mode.** The game renders at 960x540 and the frame is
+  scaled to the screen. `bd_switch_handheld_height` = 720 or 0 renders at the
+  full 1280x720. Docked renders at the display size.
+- **Pipeline cache.** `cache/vulkan_pipelines.bin` beside the NRO keeps every
+  Vulkan pipeline built so far (each one costs ~60 ms to build on NVK). The
+  first run builds them, later runs read them. Delete the file to start over.
+
 How to measure on the console:
 
 - The game log (`logs/`) gets a `[frames]` line every 10 s: fps, mean and worst
   frame time, and per frame the time waiting for the GPU, in the swapchain, in
   the frame limiter and the rest (CPU). Frames over 33/50/100 ms are counted.
+- `[gpu-passes]` lines, every 10 s: GPU time per frame from timestamps, and
+  the passes that cost the most, named by their render target (size and
+  format), with how often each runs per frame.
 - `logs/rex/rex_perfil.log` (the SDK profiler) has CPU per thread every 10 s.
   For where each thread spends its time, create an empty file
   `sdmc:/switch/reblue/logs/rex/perfil_pilas.flag`: the profiler then samples

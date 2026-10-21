@@ -20,6 +20,7 @@
 #include "core/logging.h"
 #include "gpu/device.h"
 #include "gpu/settings.h"
+#include "platform/switch_tuning.h"
 
 namespace bd::gpu {
 
@@ -33,7 +34,9 @@ bool ConfiguredResolution(u32 &w, u32 &h) {
   i32 cfg_h = 0;
   if (!rex::graphics::video_mode_util::TryGetResolutionPresetFromCVar(cfg_w,
                                                                       cfg_h))
-    return false;
+    // Switch: 960x540 in handheld mode (bd_switch_handheld_height), the
+    // swapchain staying at the screen's 1280x720.
+    return bd::platform::SwitchHandheldRenderSize(w, h);
   w = std::clamp<u32>(static_cast<u32>(cfg_w), 320u, 16384u);
   h = std::clamp<u32>(static_cast<u32>(cfg_h), 240u, 16384u);
   return true;

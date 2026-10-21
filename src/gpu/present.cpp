@@ -26,6 +26,7 @@
 #include "gpu/backend.h"
 #include "gpu/constant_buffers.h"
 #include "gpu/output.h"
+#include "gpu/pass_timer.h"
 #include "gpu/settings.h"
 
 #if defined(__SWITCH__)
@@ -360,9 +361,11 @@ void Video::Present(GuestTexture *frontBuffer) {
   }
 
   BeginCommandList(s);
+  pass_timer::MarkPresent(s.command_list, s.frame.load(std::memory_order_relaxed));
   RecordPresentPass(s, rt, back, back_fb);
 
   const u32 cur = s.frame.load(std::memory_order_relaxed);
+  pass_timer::EndFrame(s.command_lists[cur].get(), cur);
   s.command_lists[cur]->end();
   s.command_list_open = false;
 

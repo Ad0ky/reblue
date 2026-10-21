@@ -15,6 +15,8 @@
 
 #include <plume_render_interface.h>
 
+#include "gpu/pass_timer.h"
+
 #include "gpu/gpu_profiling.h"
 
 #include "core/logging.h"
@@ -224,6 +226,8 @@ bool Video::BindDrawFramebufferLocked(bool color_clear_follows) {
   plume::RenderFramebuffer *fb = GetFramebuffer(s, rt, ds);
   if (!fb)
     return false;
+  pass_timer::MarkTargets(s.command_list, s.frame.load(std::memory_order_relaxed),
+                          rt, ds);
   s.command_list->setFramebuffer(fb);
   s.dirtyStates.viewport = true;
   s.dirtyStates.scissorRect = true;

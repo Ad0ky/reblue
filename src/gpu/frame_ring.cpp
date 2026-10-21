@@ -28,6 +28,7 @@
 #include "gpu/constant_buffers.h"
 #include "gpu/host_resource_heap.h"
 #include "gpu/native_texture_mirror.h"
+#include "gpu/pass_timer.h"
 #include "gpu/physical_buffers.h"
 #include "gpu/surface_registry.h"
 
@@ -45,6 +46,7 @@ void BeginCommandList(VideoState &s) {
   s.draw_framebuffer_bound = false;
   s.last_resolved_dst = nullptr;
   s.command_list->begin();
+  pass_timer::BeginFrame(s.device.get(), s.command_list, cur);
   if (!s.null_texture_barriers_submitted) {
     plume::RenderTextureBarrier barriers[kNullTextureDescriptorCount];
     for (u32 i = 0; i < kNullTextureDescriptorCount; ++i) {
@@ -226,6 +228,7 @@ void AdvanceAndWaitReused(VideoState &s) {
   if (s.command_list_submitted[slot]) {
     s.queue->waitForCommandFence(s.fences[slot].get());
     s.command_list_submitted[slot] = false;
+    pass_timer::Collect(slot);
 #if defined(REXGLUE_ENABLE_PROFILING) && defined(REBLUE_D3D12)
     if (auto *ctx = GpuProfilerCtx()) {
       TracyD3D12NewFrame(ctx);
