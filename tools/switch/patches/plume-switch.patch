@@ -28,10 +28,29 @@ index be1c5c3..3da45a4 100644
      typedef HWND RenderWindow;
  #elif defined(__ANDROID__)
 diff --git a/plume_vulkan.cpp b/plume_vulkan.cpp
-index 11abda8..7f102c9 100644
+index 11abda8..ca9ccb1 100644
 --- a/plume_vulkan.cpp
 +++ b/plume_vulkan.cpp
-@@ -19,6 +19,16 @@
+@@ -5,7 +5,18 @@
+ // Licensed under the MIT license. See LICENSE file for details.
+ //
+ 
++#if !defined(__SWITCH__)
+ #define VMA_IMPLEMENTATION
++#else
++// reblue (Switch): everything links statically into one NRO, and the ReXGlue
++// SDK already compiles VMA (its own, newer copy) into its UI library. Two VMA
++// implementations of different versions in one image get merged by the
++// toolchain's --allow-multiple-definition, so plume's inlined VMA code ran
++// against the SDK's out-of-line functions with a different object layout
++// (the vmaDestroyImage crash on the first Present). On Switch plume uses only
++// VMA's C API, from the SDK's header and implementation (re:Blue's
++// thirdparty/CMakeLists.txt points plume at that header).
++#endif
+ #define VOLK_IMPLEMENTATION 
+ 
+ #include "plume_vulkan.h"
+@@ -19,6 +30,16 @@
  #   include <SDL3/SDL_init.h>
  #endif
  
@@ -48,7 +67,7 @@ index 11abda8..7f102c9 100644
  #if DLSS_ENABLED
  #   include "render/plume_dlss.h"
  #endif
-@@ -52,7 +62,9 @@ namespace plume {
+@@ -52,7 +73,9 @@ namespace plume {
  #   ifdef VULKAN_OBJECT_NAMES_ENABLED
          VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
  #   endif
@@ -59,7 +78,7 @@ index 11abda8..7f102c9 100644
          VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
  #   elif defined(__ANDROID__)
          VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,
-@@ -88,8 +100,10 @@ namespace plume {
+@@ -88,8 +111,10 @@ namespace plume {
          VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
          VK_EXT_SAMPLE_LOCATIONS_EXTENSION_NAME,
          VK_EXT_LOAD_STORE_OP_NONE_EXTENSION_NAME,
@@ -70,271 +89,7 @@ index 11abda8..7f102c9 100644
          VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME,
          // Vulkan spec requires this to be enabled if supported by the driver.
          VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
-@@ -832,6 +846,169 @@ namespace plume {
-         return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
-     }
- 
-+#if defined(__SWITCH__)
-+    // reblue (Switch): resource lifetime guard, a diagnostic for a crash in
-+    // vmaDestroyImage on an allocation record that VMA had already put back on
-+    // its free list while the texture owning it was still alive. Every
-+    // texture and buffer that owns a VMA allocation is tracked:
-+    //   - an allocation VMA hands out while another live object owns it,
-+    //   - an object destroyed twice or never seen created,
-+    //   - a texture whose allocation record changed under it, or during the
-+    //     vkDestroyImageView / vkDestroyImage calls of its own destroy,
-+    // print the call chains involved to stderr (rex_stderr.log) as offsets
-+    // into reblue.elf and abort, so the crash hooks write rex_crash.log too.
-+    namespace switchguard {
-+        extern "C" char _start[];
-+        constexpr int kFrames = 12;
-+        enum Kind : uint8_t { Texture = 0, Buffer = 1 };
-+        struct Record {
-+            const void *object = nullptr;
-+            const void *allocation = nullptr;
-+            Kind kind = Texture;
-+            uint64_t allocationHead[2] = {};
-+            uintptr_t frames[kFrames] = {};
-+        };
-+        std::mutex mutex;
-+        std::unordered_map<const void *, Record> live;          // object -> creation
-+        std::unordered_map<const void *, const void *> owners;  // allocation -> object
-+        Record recent[1024];
-+        uint32_t recentNext = 0;
-+        bool announced = false;
-+        // Held across every create and destroy of a tracked object, so a VMA
-+        // free on another thread cannot land inside a texture's destroy.
-+        std::recursive_mutex vmaMutex;
-+        thread_local Record lastCreation;  // creation record of the object destroying() last saw
-+
-+        const char *name(Kind k) { return k == Texture ? "texture" : "buffer"; }
-+
-+        void capture(uintptr_t *out) {
-+            const uintptr_t base = reinterpret_cast<uintptr_t>(&_start[0]);
-+            void **fp = static_cast<void **>(__builtin_frame_address(0));
-+            int i = 0;
-+            for (; i < kFrames && fp != nullptr; ++i) {
-+                const uintptr_t ret = reinterpret_cast<uintptr_t>(fp[1]);
-+                out[i] = ret >= base ? ret - base : ret;
-+                void **next = static_cast<void **>(fp[0]);
-+                if (next <= fp || (reinterpret_cast<uintptr_t>(next) & 0xF) != 0) { ++i; break; }
-+                fp = next;
-+            }
-+            for (; i < kFrames; ++i) out[i] = 0;
-+        }
-+
-+        void print(const char *what, const Record &r) {
-+            fprintf(stderr, "[texguard]   %s: %s %p allocation %p (head %016llx %016llx), chain (reblue.elf+):", what, name(r.kind),
-+                    r.object, r.allocation, (unsigned long long)r.allocationHead[0], (unsigned long long)r.allocationHead[1]);
-+            for (int i = 0; i < kFrames && r.frames[i] != 0; ++i) fprintf(stderr, " 0x%lx", (unsigned long)r.frames[i]);
-+            fprintf(stderr, "\n");
-+        }
-+
-+        void printRecent(const void *object) {
-+            for (uint32_t i = 0; i < 1024; ++i) {
-+                const Record &old = recent[(recentNext + 1023 - i) % 1024];
-+                if (old.object == object) { print("earlier destroy", old); return; }
-+            }
-+        }
-+
-+        [[noreturn]] void fail() {
-+            fflush(stderr);
-+            abort();
-+        }
-+
-+        void created(const void *object, const void *allocation, Kind kind) {
-+            Record r;
-+            r.object = object;
-+            r.allocation = allocation;
-+            r.kind = kind;
-+            if (allocation != nullptr) memcpy(r.allocationHead, allocation, sizeof(r.allocationHead));
-+            capture(r.frames);
-+            std::lock_guard<std::mutex> lock(mutex);
-+            if (!announced) {
-+                announced = true;
-+                fprintf(stderr, "[texguard] active; libstdc++ threads %s (std::mutex %s)\n",
-+                        __gthread_active_p() ? "active" : "INACTIVE",
-+                        __gthread_active_p() ? "locks" : "DOES NOTHING");
-+            }
-+            if (allocation != nullptr) {
-+                auto it = owners.find(allocation);
-+                if (it != owners.end()) {
-+                    fprintf(stderr, "[texguard] VMA returned allocation %p that a live object still owns\n", allocation);
-+                    print("new object", r);
-+                    auto l = live.find(it->second);
-+                    if (l != live.end()) print("current owner, created at", l->second);
-+                    fail();
-+                }
-+                owners[allocation] = object;
-+            }
-+            live[object] = r;
-+        }
-+
-+        void destroying(const void *object, const void *allocation, Kind kind) {
-+            Record r;
-+            r.object = object;
-+            r.allocation = allocation;
-+            r.kind = kind;
-+            if (allocation != nullptr) memcpy(r.allocationHead, allocation, sizeof(r.allocationHead));
-+            capture(r.frames);
-+            std::lock_guard<std::mutex> lock(mutex);
-+            auto it = live.find(object);
-+            if (it == live.end()) {
-+                fprintf(stderr, "[texguard] %s %p destroyed but not live (double destroy?)\n", name(kind), object);
-+                print("this destroy", r);
-+                printRecent(object);
-+                fail();
-+            }
-+            if (allocation != nullptr) {
-+                auto o = owners.find(allocation);
-+                if (o == owners.end() || o->second != object) {
-+                    fprintf(stderr, "[texguard] %s %p frees allocation %p it does not own\n", name(kind), object, allocation);
-+                    print("this destroy", r);
-+                    print("created at", it->second);
-+                    fail();
-+                }
-+                if (kind == Texture && r.allocationHead[0] != it->second.allocationHead[0]) {
-+                    fprintf(stderr, "[texguard] allocation record of texture %p changed while it was alive "
-+                                    "(freed by VMA or overwritten)\n", object);
-+                    print("now", r);
-+                    print("created at", it->second);
-+                    fail();
-+                }
-+                owners.erase(o);
-+            }
-+            lastCreation = it->second;
-+            live.erase(it);
-+            recent[recentNext] = r;
-+            recentNext = (recentNext + 1) % 1024;
-+        }
-+
-+        // The texture's allocation record must not change while the texture
-+        // destroys its view and image: report the step that changed it.
-+        void checkStep(const char *step, const void *object, const void *allocation, const unsigned char *before,
-+                       size_t size, const void *image, const void *view) {
-+            if (memcmp(before, allocation, size) == 0) return;
-+            fprintf(stderr, "[texguard] allocation record %p (%zu bytes) of texture %p changed during %s; image %p view %p\n",
-+                    allocation, size, object, step, image, view);
-+            const unsigned char *now = static_cast<const unsigned char *>(allocation);
-+            for (size_t off = 0; off + 8 <= size; off += 8) {
-+                uint64_t a, b;
-+                memcpy(&a, before + off, 8);
-+                memcpy(&b, now + off, 8);
-+                if (a != b) fprintf(stderr, "[texguard]   +0x%02zx: %016llx -> %016llx\n", off, (unsigned long long)a, (unsigned long long)b);
-+            }
-+            const intptr_t rec = reinterpret_cast<intptr_t>(allocation);
-+            fprintf(stderr, "[texguard]   record - image = %lld, record - view = %lld, record - texture = %lld\n",
-+                    (long long)(rec - reinterpret_cast<intptr_t>(image)), (long long)(rec - reinterpret_cast<intptr_t>(view)),
-+                    (long long)(rec - reinterpret_cast<intptr_t>(object)));
-+            print("created at", lastCreation);
-+            Record r;
-+            r.object = object;
-+            r.allocation = allocation;
-+            capture(r.frames);
-+            print("destroyed at", r);
-+            fail();
-+        }
-+    }
-+#endif
-+
-     // VulkanBuffer
- 
-     VulkanBuffer::VulkanBuffer(VulkanDevice *device, VulkanPool *pool, const RenderBufferDesc &desc) {
-@@ -904,6 +1081,9 @@ namespace plume {
-         }
- 
-         VkResult res;
-+#   if defined(__SWITCH__)
-+        std::lock_guard<std::recursive_mutex> vmaLock(switchguard::vmaMutex);
-+#   endif
-         if (minAlignment > 0) {
-             res = vmaCreateBufferWithAlignment(device->allocator, &bufferInfo, &createInfo, minAlignment, &vk, &allocation, &allocationInfo);
-         }
-@@ -915,10 +1095,17 @@ namespace plume {
-             fprintf(stderr, "vmaCreateBuffer failed with error code 0x%X.\n", res);
-             return;
-         }
-+#   if defined(__SWITCH__)
-+        switchguard::created(this, allocation, switchguard::Buffer);
-+#   endif
-     }
- 
-     VulkanBuffer::~VulkanBuffer() {
-         if (vk != VK_NULL_HANDLE) {
-+#   if defined(__SWITCH__)
-+            std::lock_guard<std::recursive_mutex> vmaLock(switchguard::vmaMutex);
-+            switchguard::destroying(this, allocation, switchguard::Buffer);
-+#   endif
-             vmaDestroyBuffer(device->allocator, vk, allocation);
-         }
-     }
-@@ -985,6 +1172,7 @@ namespace plume {
- 
-     // VulkanTexture
- 
-+
-     VulkanTexture::VulkanTexture(VulkanDevice *device, VulkanPool *pool, const RenderTextureDesc &desc) {
-         assert(device != nullptr);
- 
-@@ -1030,11 +1218,18 @@ namespace plume {
-             createInfo.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-         }
- 
-+#   if defined(__SWITCH__)
-+        std::unique_lock<std::recursive_mutex> vmaLock(switchguard::vmaMutex);
-+#   endif
-         VkResult res = vmaCreateImage(device->allocator, &imageInfo, &createInfo, &vk, &allocation, &allocationInfo);
-         if (res != VK_SUCCESS) {
-             fprintf(stderr, "vmaCreateImage failed with error code 0x%X.\n", res);
-             return;
-         }
-+#   if defined(__SWITCH__)
-+        switchguard::created(this, allocation, switchguard::Texture);
-+        vmaLock.unlock();
-+#   endif
- 
-         createImageView(imageInfo.format);
-     }
-@@ -1048,6 +1243,30 @@ namespace plume {
-     }
- 
-     VulkanTexture::~VulkanTexture() {
-+#   if defined(__SWITCH__)
-+        // vmaDestroyImage split into its two steps (vkDestroyImage, then
-+        // vmaFreeMemory) so the guard can check the record after each call.
-+        const bool owned = ownership && (vk != VK_NULL_HANDLE);
-+        std::lock_guard<std::recursive_mutex> vmaLock(switchguard::vmaMutex);
-+        unsigned char before[sizeof(VmaAllocation_T)];
-+        if (owned) {
-+            switchguard::destroying(this, allocation, switchguard::Texture);
-+            if (allocation != VK_NULL_HANDLE) memcpy(before, allocation, sizeof(before));
-+        }
-+        if (imageView != VK_NULL_HANDLE) {
-+            vkDestroyImageView(device->vk, imageView, nullptr);
-+            if (owned && (allocation != VK_NULL_HANDLE)) {
-+                switchguard::checkStep("vkDestroyImageView", this, allocation, before, sizeof(before), vk, imageView);
-+            }
-+        }
-+        if (owned) {
-+            vkDestroyImage(device->vk, vk, nullptr);
-+            if (allocation != VK_NULL_HANDLE) {
-+                switchguard::checkStep("vkDestroyImage", this, allocation, before, sizeof(before), vk, imageView);
-+                vmaFreeMemory(device->allocator, allocation);
-+            }
-+        }
-+#   else
-         if (imageView != VK_NULL_HANDLE) {
-             vkDestroyImageView(device->vk, imageView, nullptr);
-         }
-@@ -1055,6 +1274,7 @@ namespace plume {
-         if (ownership && (vk != VK_NULL_HANDLE)) {
-             vmaDestroyImage(device->allocator, vk, allocation);
-         }
-+#   endif
-     }
-     
-     void VulkanTexture::createImageView(VkFormat format) {
-@@ -2104,7 +2324,19 @@ namespace plume {
+@@ -2104,7 +2129,19 @@ namespace plume {
  
          VkResult res;
  
@@ -355,7 +110,7 @@ index 11abda8..7f102c9 100644
          assert(desc.renderWindow != 0);
          VkWin32SurfaceCreateInfoKHR surfaceCreateInfo = {};
          surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-@@ -2479,7 +2711,18 @@ namespace plume {
+@@ -2479,7 +2516,18 @@ namespace plume {
      }
  
      void VulkanSwapChain::getWindowSize(uint32_t &dstWidth, uint32_t &dstHeight) const {
@@ -375,7 +130,7 @@ index 11abda8..7f102c9 100644
          RECT rect;
          GetClientRect(desc.renderWindow, &rect);
          dstWidth = rect.right - rect.left;
-@@ -3849,6 +4092,14 @@ namespace plume {
+@@ -3849,6 +3897,14 @@ namespace plume {
  
          // Store properties.
          vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
@@ -390,7 +145,7 @@ index 11abda8..7f102c9 100644
  
          // Check for supported features.
          void *featuresChain = nullptr;
-@@ -4481,7 +4732,23 @@ namespace plume {
+@@ -4481,7 +4537,23 @@ namespace plume {
      // VulkanInterface
  
      VulkanInterface::VulkanInterface() {

@@ -15,6 +15,16 @@ endif()
 add_subdirectory(plume EXCLUDE_FROM_ALL)
 
 if(REBLUE_SWITCH)
+    # One VMA in the NRO: the SDK's UI library (rexui) already compiles its own,
+    # newer VMA, so on Switch plume does not (see plume_vulkan.cpp) and builds
+    # against the SDK's vk_mem_alloc.h instead of its contrib copy. Two
+    # versions silently merged by --allow-multiple-definition crashed in
+    # vmaDestroyImage.
+    set(_reblue_sdk_vma "${REXSDK_DIR}/thirdparty/vulkan-memory-allocator/include")
+    if(NOT EXISTS "${_reblue_sdk_vma}/vk_mem_alloc.h")
+        message(FATAL_ERROR "SDK VMA header missing at ${_reblue_sdk_vma}: run the host stage first")
+    endif()
+    target_include_directories(plume BEFORE PUBLIC "${_reblue_sdk_vma}")
     # XenosRecomp and dxc are host programs; the host stage of
     # tools/switch/build-switch.sh runs them. Only dxc's command line is needed
     # here, for re:Blue's own HLSL (cmake/shaders.cmake), and the vendored

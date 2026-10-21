@@ -104,6 +104,7 @@ The SDK also writes `stderr`/abort reports beside the NRO (nfsmw-nx's
 | Toolchain | devkitA64 GCC, libnx (`cmake/toolchains/switch-devkitA64.cmake`, from nfsmw-nx); re:Blue's Switch settings in `cmake/switch.cmake` |
 | Code generation | host `rexglue codegen` in stage 1; the cross build uses `generated/` as is (`generated/rexglue.cmake`) |
 | Graphics | re:Blue's renderer on plume Vulkan, Mesa NVK linked statically, `VK_NN_vi_surface` on the default `NWindow` (`tools/switch/patches/plume-switch.patch`, `volk-switch.patch`, from the Lost Odyssey port) |
+| GPU memory | one VMA, the SDK's (3.3.0, built into its UI library); plume skips its own copy on Switch and uses the SDK's header. Everything links into one image with `--allow-multiple-definition` (needed for NVK's Rust libraries), so a second VMA of another version would be merged silently and break at run time |
 | Game shaders | the SPIR-V cache XenosRecomp makes on the host; there is no shader compiler on the console |
 | Paths | the NRO's folder is the install root: `game/` beside it is used as a portable install (`reblue_app.cpp`, `core/app_root.cpp`) |
 | Dialogs | the system error applet; no file dialogs (`platform/switch/dialogs_switch.cpp`) |
@@ -113,7 +114,7 @@ The SDK also writes `stderr`/abort reports beside the NRO (nfsmw-nx's
 
 ## Known gaps
 
-- Not run on a console yet.
+- Boots to the first frames on a console; not played further yet.
 - Shift-JIS conversion: newlib has no iconv, so non-ASCII text in guest debug
   prints and in mod rows added to game tables becomes `?`.
 - No performance work yet (nfsmw-nx's direct calls, LTO/PGO, function ordering,
