@@ -8,6 +8,7 @@
 #include <string.h>
 #include <switch.h>
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <atomic>
@@ -437,6 +438,42 @@ int RexGmModoProteccion(void) {
     }
 }
 
+void RexGmDescribeKernelUse(char* out, size_t out_size) {
+    /* Memory blocks of this process as the kernel sees them, and its system resource. */
+    size_t blocks = 0, code_blocks = 0, heap_blocks = 0;
+    u64 addr = 0;
+    for (int guard = 0; guard < 200000; ++guard) {
+        MemoryInfo info{};
+        u32 page_info = 0;
+        if (R_FAILED(svcQueryMemory(&info, &page_info, addr)) || info.size == 0) break;
+        ++blocks;
+        const u32 type = info.type & MemState_Type;
+        if (type == MemType_ModuleCodeStatic || type == MemType_ModuleCodeMutable) ++code_blocks;
+        if (type == MemType_Heap) ++heap_blocks;
+        const u64 next = info.addr + info.size;
+        if (next <= addr) break;
+        addr = next;
+    }
+    u64 res_total = 0, res_used = 0, mem_total = 0, mem_used = 0;
+    svcGetInfo(&res_total, InfoType_SystemResourceSizeTotal, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&res_used, InfoType_SystemResourceSizeUsed, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&mem_total, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&mem_used, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0);
+    size_t chunks = 0, view_maps = 0;
+    {
+        State& s = S();
+        std::lock_guard<std::mutex> lock(s.mutex);
+        chunks = s.chunks.size();
+        view_maps = s.view_mapped.size();
+    }
+    snprintf(out, out_size,
+             "%zu memory blocks (%zu code memory, %zu heap); guest chunks %zu, view mappings %zu; "
+             "system resource %llu/%llu KB; memory %llu/%llu MB",
+             blocks, code_blocks, heap_blocks, chunks, view_maps, (unsigned long long)(res_used >> 10),
+             (unsigned long long)(res_total >> 10), (unsigned long long)(mem_used >> 20),
+             (unsigned long long)(mem_total >> 20));
+}
+
 uint32_t RexGmLastResult(void) {
     State& s = S();
     std::lock_guard<std::mutex> lock(s.mutex);
@@ -478,8 +515,21 @@ bool RexGmCommit(size_t offset, size_t length, RexGmAccess access) {
     std::lock_guard<std::mutex> lock(s.mutex);
     if (!s.base) return false;
 
-    const size_t begin = AlignDown(offset, kPageSize);
-    const size_t end   = AlignUp(offset + length, kPageSize);
+    /*
+     * reblue: commit whole 2 MB blocks. Every chunk is a heap allocation turned
+     * into code memory, plus one more mapping per view it is touched through,
+     * and each of those is a kernel memory block. Blue Dragon's physical heap
+     * commits in 128 KB pieces, and at ~630 MB committed the kernel ran out of
+     * memory blocks on the second load (svcMapProcessCodeMemory 0xCE01,
+     * OutOfResource), with most of the heap still free. Committing 2 MB blocks,
+     * as the Lost Odyssey port does, cuts the block count by up to 16x; the
+     * guest's allocators are dense, so little is committed for nothing.
+     */
+    size_t mapping_end = 0;
+    for (const View& v : s.views) mapping_end = std::max(mapping_end, v.offset + v.length);
+    const size_t begin = AlignDown(offset, kBlockSize);
+    size_t end = AlignUp(offset + length, kBlockSize);
+    if (mapping_end != 0 && end > mapping_end) end = std::max(AlignUp(offset + length, kPageSize), mapping_end);
 
     size_t cur = begin;
     while (cur < end) {

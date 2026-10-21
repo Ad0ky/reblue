@@ -30,6 +30,11 @@ Prefetch::~Prefetch() { Shutdown(); }
 void Prefetch::Init(const std::filesystem::path &game_root) {
   if (!Settings::Get().DiscPrefetch() || game_root.empty())
     return;
+#if defined(__SWITCH__)
+  // Opening every file only warms an OS file cache, and Horizon has none for
+  // the SD card: on the console it took ~14 s of start-up and bought nothing.
+  return;
+#endif
 
   Shutdown();
   stop_ = false;

@@ -186,6 +186,9 @@ int RexGmModoProteccion(void);
  */
 uint32_t RexGmLastResult(void);
 
+/* One line on the kernel resources the mappings use (memory blocks, system resource), for failure logs. */
+void RexGmDescribeKernelUse(char* out, size_t out_size);
+
 #define REX_GM_ERR_NOMEM    0xFFFF0001u  /* memalign of the backing store failed */
 #define REX_GM_ERR_NOCODEVA 0xFFFF0002u  /* no free space left in the code region */
 

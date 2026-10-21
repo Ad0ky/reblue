@@ -32,6 +32,7 @@
  *    from one would take it away from all of them.
  */
 
+#include <atomic>
 #include <rex/platform.h>
 
 #if REX_PLATFORM_SWITCH
@@ -163,6 +164,14 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
                  "respaldo {} MB, mapeado {} MB contando espejos.",
                  length, reinterpret_cast<uintptr_t>(base_address), RexGmLastResult(),
                  RexGmCommittedBytes() >> 20, RexGmMappedBytes() >> 20);
+    {
+      static std::atomic<int> described{0};
+      if (described.fetch_add(1) < 3) {
+        char use[256];
+        RexGmDescribeKernelUse(use, sizeof(use));
+        REXLOG_ERROR("AllocFixed: kernel use: {}", use);
+      }
+    }
     return nullptr;
   }
 
