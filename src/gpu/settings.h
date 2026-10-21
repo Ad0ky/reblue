@@ -90,8 +90,15 @@ struct PresetBundle {
 };
 
 inline constexpr PresetBundle kPresets[kQualityPresetCount] = {
+#if defined(__SWITCH__)
+    // Tegra X1: 2x anisotropic filtering on Low; 16x samples up to eight
+    // times more texels for every oblique surface.
+    /* Low    */ {1, 0, 2, 1.0, 1024, PostQuality::Low,
+                  ReflectionQuality::Low},
+#else
     /* Low    */ {1, 0, 16, 1.0, 1024, PostQuality::Low,
                   ReflectionQuality::Low},
+#endif
     /* Medium */ {1, 4, 16, 2.0, 4096, PostQuality::Medium,
                   ReflectionQuality::Medium},
     /* High   */ {2, 4, 16, 2.0, 4096, PostQuality::High,
