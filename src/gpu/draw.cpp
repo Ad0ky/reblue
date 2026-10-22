@@ -249,27 +249,10 @@ bool Video::FlushRenderStateLocked(u32 device_guest) {
   // constants are still live and the 4 KiB byte swap upload can be skipped.
   // Vulkan push offsets 0/8/16 follow the guest PushConstants member order
   // emitted by the recompiler.
-#if REBLUE_UBO_CONSTANTS
-  // The Switch with bd_switch_ubo_constants: the three blocks go into set 5 by
-  // dynamic offsets (constant_buffers.h) instead of device addresses in push
-  // constants.
-  const bool ubo = UboConstantsEnabled();
-  if (ubo) {
-    if (device_guest) {
-      if (s.dirtyStates.vertexShaderConstants)
-        SetDrawConstants(kVertexBank, UploadVertexShaderConstants(device_guest));
-      if (s.dirtyStates.pixelShaderConstants)
-        SetDrawConstants(kPixelBank, UploadPixelShaderConstants(device_guest));
-      SetDrawConstants(kSharedBank, UploadSharedConstants(device_guest));
-    }
-    BindDrawConstants(s.command_list);
-  }
-#else
-  constexpr bool ubo = false;
-#endif
-  if (device_guest && !ubo) {
+  if (device_guest) {
+    ConstantAllocation vs_alloc{}, ps_alloc{};
     if (s.dirtyStates.vertexShaderConstants) {
-      auto vs_alloc = UploadVertexShaderConstants(device_guest);
+      vs_alloc = UploadVertexShaderConstants(device_guest);
       if (vs_alloc.size) {
 #if defined(REBLUE_D3D12)
         s.command_list->setGraphicsRootDescriptor(vs_alloc.ref, 0);
@@ -281,7 +264,7 @@ bool Video::FlushRenderStateLocked(u32 device_guest) {
     }
 
     if (s.dirtyStates.pixelShaderConstants) {
-      auto ps_alloc = UploadPixelShaderConstants(device_guest);
+      ps_alloc = UploadPixelShaderConstants(device_guest);
       if (ps_alloc.size) {
 #if defined(REBLUE_D3D12)
         s.command_list->setGraphicsRootDescriptor(ps_alloc.ref, 1);
@@ -307,6 +290,20 @@ bool Video::FlushRenderStateLocked(u32 device_guest) {
                                                2 * sizeof(u64), sizeof(u64));
 #endif
     }
+
+#if REBLUE_UBO_CONSTANTS
+    // The Switch with bd_switch_ubo_constants: the guest shaders read the same
+    // three blocks from set 5 by dynamic offsets (constant_buffers.h). The
+    // device addresses above are pushed as well: re:Blue's own substitute
+    // shaders (hlsl/bd_2d_blit_vs, bd_pe_ps_*) still read through them, and a
+    // draw with them unset faults the GPU.
+    if (UboConstantsEnabled()) {
+      SetDrawConstants(kVertexBank, vs_alloc);
+      SetDrawConstants(kPixelBank, ps_alloc);
+      SetDrawConstants(kSharedBank, sc_alloc);
+      BindDrawConstants(s.command_list);
+    }
+#endif
   }
 
   // Lens flare occlusion count: the counter UAV (root descriptor 3 on D3D12,
