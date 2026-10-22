@@ -48,6 +48,11 @@ struct UploadChunk {
   std::unique_ptr<plume::RenderBuffer> buffer;
   u8 *mapped = nullptr;
   u64 gpuBase = 0;
+#if REBLUE_UBO_CONSTANTS
+  // Set 5 over this chunk: the three constant blocks of a draw live in one
+  // chunk and are picked out by dynamic offsets.
+  std::unique_ptr<plume::RenderDescriptorSet> constantSet;
+#endif
 };
 
 // One upload chunk list per in-flight frame slot, rewound only after that
@@ -81,6 +86,12 @@ struct UploadState {
   float shadowPcfScale = 1.0f;
   bool sharedBound = false;
   bool ready = false;
+#if REBLUE_UBO_CONSTANTS
+  plume::RenderDescriptorSetBuilder constantSetBuilder;
+  bool haveConstantSetBuilder = false;
+  ConstantAllocation drawBlocks[3];
+  bool drawBlocksChanged = true;
+#endif
 };
 
 UploadState &upload_state() {
@@ -246,7 +257,122 @@ void ResetFrame(u32 slot) {
   RecomputeShadowPcfScale(s);
 }
 
-void InvalidateSharedBinding() { upload_state().sharedBound = false; }
+void InvalidateSharedBinding() {
+  auto &s = upload_state();
+  s.sharedBound = false;
+#if REBLUE_UBO_CONSTANTS
+  // A new command list: nothing is bound, and the blocks recorded so far may
+  // belong to a frame slot that is being rewound.
+  for (auto &block : s.drawBlocks)
+    block = {};
+  s.drawBlocksChanged = true;
+#endif
+}
+
+#if REBLUE_UBO_CONSTANTS
+namespace {
+
+constexpr u32 kBankBytes[3] = {kConstantBlockBytes, kConstantBlockBytes,
+                               u32(sizeof(SharedConstants))};
+
+// The upload chunk of the current frame slot that holds 'alloc', or -1.
+int ChunkOf(UploadState &s, const ConstantAllocation &alloc) {
+  FrameUpload &up = s.frames[s.cursor];
+  for (size_t i = 0; i < up.chunks.size(); ++i)
+    if (up.chunks[i].buffer.get() == alloc.ref.ref)
+      return int(i);
+  return -1;
+}
+
+} // namespace
+
+void AddConstantDescriptorSet(plume::RenderPipelineLayoutBuilder &layout) {
+  auto &s = upload_state();
+  s.constantSetBuilder.begin();
+  for (u32 bank = 0; bank < 3; ++bank)
+    s.constantSetBuilder.addDynamicConstantBuffer(bank);
+  s.constantSetBuilder.end();
+  s.haveConstantSetBuilder = true;
+  layout.addDescriptorSet(s.constantSetBuilder);
+}
+
+void SetDrawConstants(ConstantBank bank, const ConstantAllocation &alloc) {
+  auto &s = upload_state();
+  if (!alloc.memory || bank > kSharedBank)
+    return;
+  s.drawBlocks[bank] = alloc;
+  s.drawBlocksChanged = true;
+}
+
+void BindDrawConstants(plume::RenderCommandList *list) {
+  auto &s = upload_state();
+  if (!s.drawBlocksChanged || !list || !s.haveConstantSetBuilder || !s.ready)
+    return;
+
+  // A bank nothing was uploaded for yet reads zeros rather than leaving set 5
+  // unbound for a pipeline that uses it.
+  static const u8 kZeros[kConstantBlockBytes] = {};
+  for (u32 bank = 0; bank < 3; ++bank) {
+    if (s.drawBlocks[bank].memory)
+      continue;
+    ConstantAllocation zeros = Allocate(s, kBankBytes[bank], kCBVAlignment);
+    if (!zeros.memory)
+      return;
+    std::memcpy(zeros.memory, kZeros, kBankBytes[bank]);
+    s.drawBlocks[bank] = zeros;
+  }
+
+  // All three in the newest of their chunks: the others are copied there
+  // (their bytes stay valid until the slot is rewound). Only at a chunk
+  // boundary.
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    int target = -1;
+    for (const auto &block : s.drawBlocks)
+      target = std::max(target, ChunkOf(s, block));
+    if (target < 0)
+      return;
+    bool moved = false;
+    for (u32 bank = 0; bank < 3; ++bank) {
+      if (ChunkOf(s, s.drawBlocks[bank]) == target)
+        continue;
+      ConstantAllocation copy = Allocate(s, kBankBytes[bank], kCBVAlignment);
+      if (!copy.memory)
+        return;
+      std::memcpy(copy.memory, s.drawBlocks[bank].memory, kBankBytes[bank]);
+      s.drawBlocks[bank] = copy;
+      moved = true;
+    }
+    if (!moved)
+      break;
+  }
+  const int chunkIndex = ChunkOf(s, s.drawBlocks[0]);
+  if (chunkIndex < 0 || ChunkOf(s, s.drawBlocks[1]) != chunkIndex ||
+      ChunkOf(s, s.drawBlocks[2]) != chunkIndex)
+    return;
+
+  UploadChunk &chunk = s.frames[s.cursor].chunks[size_t(chunkIndex)];
+  if (!chunk.constantSet) {
+    auto *device = bd::gpu::Video::HostDevice();
+    if (!device)
+      return;
+    chunk.constantSet = s.constantSetBuilder.create(device);
+    if (!chunk.constantSet) {
+      BD_ERROR("constant_buffers: createDescriptorSet for set {} failed",
+               kConstantDescriptorSetIndex);
+      return;
+    }
+    for (u32 bank = 0; bank < 3; ++bank)
+      chunk.constantSet->setBuffer(bank, chunk.buffer.get(), kBankBytes[bank]);
+  }
+  const u32 offsets[3] = {u32(s.drawBlocks[0].ref.offset),
+                          u32(s.drawBlocks[1].ref.offset),
+                          u32(s.drawBlocks[2].ref.offset)};
+  list->setGraphicsDescriptorSetDynamic(chunk.constantSet.get(),
+                                        kConstantDescriptorSetIndex, offsets,
+                                        3);
+  s.drawBlocksChanged = false;
+}
+#endif
 
 // c50.xy is BD's NDC->UV half-scale (0.5 on hw). bd_blur_ps reconstructs its
 // sample UV as uv = c50.xy*(ndc+1), so it MUST be 0.5. The guest derives it

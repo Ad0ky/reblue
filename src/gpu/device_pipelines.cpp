@@ -17,6 +17,7 @@
 #include "core/logging.h"
 #include "gpu/backend.h"
 #include "gpu/bindless_allocator.h"
+#include "gpu/constant_buffers.h"
 #include "gpu/format.h"
 #include "gpu/settings.h"
 
@@ -224,6 +225,11 @@ bool BuildPipelineLayout(VideoState &s) {
     }
   }
   layout_builder.addDescriptorSet(occlusion_set_builder);
+#if REBLUE_UBO_CONSTANTS
+  // Set 5: the guest shaders' constant blocks as dynamic uniform buffers
+  // (constant_buffers.h).
+  AddConstantDescriptorSet(layout_builder);
+#endif
 #endif
 
   layout_builder.end();

@@ -1,5 +1,37 @@
+diff --git a/plume_render_interface.h b/plume_render_interface.h
+index 2048557..560d51d 100644
+--- a/plume_render_interface.h
++++ b/plume_render_interface.h
+@@ -127,6 +127,12 @@ namespace plume {
+         virtual void setGraphicsPipelineLayout(const RenderPipelineLayout *pipelineLayout) = 0;
+         virtual void setGraphicsPushConstants(uint32_t rangeIndex, const void *data, uint32_t offset = 0, uint32_t size = 0) = 0;
+         virtual void setGraphicsDescriptorSet(RenderDescriptorSet *descriptorSet, uint32_t setIndex) = 0;
++        // Binds a set with DYNAMIC_CONSTANT_BUFFER ranges, one offset per such
++        // descriptor in binding order. Vulkan only.
++        virtual void setGraphicsDescriptorSetDynamic(RenderDescriptorSet *descriptorSet, uint32_t setIndex, const uint32_t *dynamicOffsets, uint32_t dynamicOffsetCount) {
++            (void)descriptorSet; (void)setIndex; (void)dynamicOffsets; (void)dynamicOffsetCount;
++            assert(false && "Dynamic descriptor offsets are only supported in Vulkan.");
++        }
+         virtual void setGraphicsRootDescriptor(RenderBufferReference bufferReference, uint32_t rootDescriptorIndex) = 0;
+         virtual void setRaytracingPipelineLayout(const RenderPipelineLayout *pipelineLayout) = 0;
+         virtual void setRaytracingPushConstants(uint32_t rangeIndex, const void *data, uint32_t offset = 0, uint32_t size = 0) = 0;
+diff --git a/plume_render_interface_builders.h b/plume_render_interface_builders.h
+index acfedce..39f5c8d 100644
+--- a/plume_render_interface_builders.h
++++ b/plume_render_interface_builders.h
+@@ -35,6 +35,10 @@ namespace plume {
+             return addRange(RenderDescriptorRange(RenderDescriptorRangeType::CONSTANT_BUFFER, binding, count, nullptr));
+         }
+ 
++        uint32_t addDynamicConstantBuffer(uint32_t binding, uint32_t count = 1) {
++            return addRange(RenderDescriptorRange(RenderDescriptorRangeType::DYNAMIC_CONSTANT_BUFFER, binding, count, nullptr));
++        }
++
+         uint32_t addFormattedBuffer(uint32_t binding, uint32_t count = 1) {
+             return addRange(RenderDescriptorRange(RenderDescriptorRangeType::FORMATTED_BUFFER, binding, count, nullptr));
+         }
 diff --git a/plume_render_interface_types.h b/plume_render_interface_types.h
-index be1c5c3..3da45a4 100644
+index be1c5c3..3de1c1b 100644
 --- a/plume_render_interface_types.h
 +++ b/plume_render_interface_types.h
 @@ -15,7 +15,11 @@
@@ -27,8 +59,20 @@ index be1c5c3..3da45a4 100644
      // Native HWND handle to the target window.
      typedef HWND RenderWindow;
  #elif defined(__ANDROID__)
+@@ -355,7 +362,10 @@ namespace plume {
+         READ_WRITE_STRUCTURED_BUFFER,
+         BYTE_ADDRESS_BUFFER,
+         READ_WRITE_BYTE_ADDRESS_BUFFER,
+-        ACCELERATION_STRUCTURE
++        ACCELERATION_STRUCTURE,
++        // Vulkan: a uniform buffer whose offset is given at bind time
++        // (setGraphicsDescriptorSetDynamic). From Lost Odyssey Recomp's plume.
++        DYNAMIC_CONSTANT_BUFFER
+     };
+ 
+     enum class RenderRootDescriptorType {
 diff --git a/plume_vulkan.cpp b/plume_vulkan.cpp
-index 11abda8..aa112cf 100644
+index 11abda8..c7800a0 100644
 --- a/plume_vulkan.cpp
 +++ b/plume_vulkan.cpp
 @@ -5,7 +5,18 @@
@@ -99,7 +143,16 @@ index 11abda8..aa112cf 100644
          VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME,
          // Vulkan spec requires this to be enabled if supported by the driver.
          VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
-@@ -832,6 +862,100 @@ namespace plume {
+@@ -549,6 +579,8 @@ namespace plume {
+             return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+         case RenderDescriptorRangeType::ACCELERATION_STRUCTURE:
+             return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
++        case RenderDescriptorRangeType::DYNAMIC_CONSTANT_BUFFER:
++            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+         default:
+             assert(false && "Unknown descriptor range type.");
+             return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+@@ -832,6 +864,100 @@ namespace plume {
          return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
      }
  
@@ -200,7 +253,7 @@ index 11abda8..aa112cf 100644
      // VulkanBuffer
  
      VulkanBuffer::VulkanBuffer(VulkanDevice *device, VulkanPool *pool, const RenderBufferDesc &desc) {
-@@ -1412,7 +1536,12 @@ namespace plume {
+@@ -1412,7 +1538,12 @@ namespace plume {
          pipelineInfo.layout = pipelineLayout->vk;
          pipelineInfo.stage = stageInfo;
  
@@ -213,7 +266,7 @@ index 11abda8..aa112cf 100644
          if (res != VK_SUCCESS) {
              fprintf(stderr, "vkCreateComputePipelines failed with error code 0x%X.\n", res);
              return;
-@@ -1671,7 +1800,12 @@ namespace plume {
+@@ -1671,7 +1802,12 @@ namespace plume {
          pipelineInfo.layout = pipelineLayout->vk;
          pipelineInfo.renderPass = renderPass;
  
@@ -226,7 +279,7 @@ index 11abda8..aa112cf 100644
          if (res != VK_SUCCESS) {
              fprintf(stderr, "vkCreateGraphicsPipelines failed with error code 0x%X.\n", res);
              return;
-@@ -2104,7 +2238,19 @@ namespace plume {
+@@ -2104,7 +2240,19 @@ namespace plume {
  
          VkResult res;
  
@@ -247,7 +300,7 @@ index 11abda8..aa112cf 100644
          assert(desc.renderWindow != 0);
          VkWin32SurfaceCreateInfoKHR surfaceCreateInfo = {};
          surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-@@ -2479,7 +2625,18 @@ namespace plume {
+@@ -2479,7 +2627,18 @@ namespace plume {
      }
  
      void VulkanSwapChain::getWindowSize(uint32_t &dstWidth, uint32_t &dstHeight) const {
@@ -267,7 +320,23 @@ index 11abda8..aa112cf 100644
          RECT rect;
          GetClientRect(desc.renderWindow, &rect);
          dstWidth = rect.right - rect.left;
-@@ -3849,6 +4006,14 @@ namespace plume {
+@@ -3022,6 +3181,15 @@ namespace plume {
+         setDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, activeGraphicsPipelineLayout, descriptorSet, setIndex);
+     }
+ 
++    void VulkanCommandList::setGraphicsDescriptorSetDynamic(RenderDescriptorSet *descriptorSet, uint32_t setIndex, const uint32_t *dynamicOffsets, uint32_t dynamicOffsetCount) {
++        assert(activeGraphicsPipelineLayout != nullptr);
++        assert(descriptorSet != nullptr);
++        assert(setIndex < activeGraphicsPipelineLayout->descriptorSetLayouts.size());
++
++        const VulkanDescriptorSet *interfaceSet = static_cast<const VulkanDescriptorSet *>(descriptorSet);
++        vkCmdBindDescriptorSets(vk, VK_PIPELINE_BIND_POINT_GRAPHICS, activeGraphicsPipelineLayout->vk, setIndex, 1, &interfaceSet->vk, dynamicOffsetCount, dynamicOffsets);
++    }
++
+     void VulkanCommandList::setGraphicsRootDescriptor(RenderBufferReference bufferReference, uint32_t rootDescriptorIndex) {
+         assert(false && "Root descriptors are not supported in Vulkan.");
+     }
+@@ -3849,6 +4017,14 @@ namespace plume {
  
          // Store properties.
          vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
@@ -282,7 +351,7 @@ index 11abda8..aa112cf 100644
  
          // Check for supported features.
          void *featuresChain = nullptr;
-@@ -4118,6 +4283,33 @@ namespace plume {
+@@ -4118,6 +4294,33 @@ namespace plume {
              return;
          }
  
@@ -316,7 +385,7 @@ index 11abda8..aa112cf 100644
          // Find the biggest device local memory available on the device.
          VkDeviceSize memoryHeapSize = 0;
          const VkPhysicalDeviceMemoryProperties *memoryProps = nullptr;
-@@ -4453,6 +4645,25 @@ namespace plume {
+@@ -4453,6 +4656,25 @@ namespace plume {
      void VulkanDevice::release() {
          nullBuffer = nullptr; // force destruction before destroying allocator
  
@@ -342,7 +411,7 @@ index 11abda8..aa112cf 100644
          if (allocator != VK_NULL_HANDLE) {
              vmaDestroyAllocator(allocator);
              allocator = VK_NULL_HANDLE;
-@@ -4481,7 +4692,23 @@ namespace plume {
+@@ -4481,7 +4703,23 @@ namespace plume {
      // VulkanInterface
  
      VulkanInterface::VulkanInterface() {
@@ -367,7 +436,7 @@ index 11abda8..aa112cf 100644
              fprintf(stderr, "volkInitialize failed with error code 0x%X.\n", res);
              return;
 diff --git a/plume_vulkan.h b/plume_vulkan.h
-index 589d0f9..1942b3c 100644
+index 589d0f9..3c60f1c 100644
 --- a/plume_vulkan.h
 +++ b/plume_vulkan.h
 @@ -10,11 +10,14 @@
@@ -399,7 +468,15 @@ index 589d0f9..1942b3c 100644
      struct VulkanCommandQueue;
      struct VulkanDevice;
      struct VulkanInterface;
-@@ -416,6 +425,16 @@ namespace plume {
+@@ -319,6 +328,7 @@ namespace plume {
+         void setGraphicsPipelineLayout(const RenderPipelineLayout *pipelineLayout) override;
+         void setGraphicsPushConstants(uint32_t rangeIndex, const void *data, uint32_t offset = 0, uint32_t size = 0) override;
+         void setGraphicsDescriptorSet(RenderDescriptorSet *descriptorSet, uint32_t setIndex) override;
++        void setGraphicsDescriptorSetDynamic(RenderDescriptorSet *descriptorSet, uint32_t setIndex, const uint32_t *dynamicOffsets, uint32_t dynamicOffsetCount) override;
+         void setGraphicsRootDescriptor(RenderBufferReference bufferReference, uint32_t rootDescriptorIndex) override;
+         void setRaytracingPipelineLayout(const RenderPipelineLayout *pipelineLayout) override;
+         void setRaytracingPushConstants(uint32_t rangeIndex, const void *data, uint32_t offset = 0, uint32_t size = 0) override;
+@@ -416,6 +426,16 @@ namespace plume {
          VkPhysicalDeviceSampleLocationsPropertiesEXT sampleLocationProperties = {};
          std::unique_ptr<RenderBuffer> nullBuffer;
          bool loadStoreOpNoneSupported = false;

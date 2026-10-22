@@ -249,6 +249,18 @@ bool Video::FlushRenderStateLocked(u32 device_guest) {
   // constants are still live and the 4 KiB byte swap upload can be skipped.
   // Vulkan push offsets 0/8/16 follow the guest PushConstants member order
   // emitted by the recompiler.
+#if REBLUE_UBO_CONSTANTS
+  // The Switch: the three blocks go into set 5 by dynamic offsets
+  // (constant_buffers.h) instead of device addresses in push constants.
+  if (device_guest) {
+    if (s.dirtyStates.vertexShaderConstants)
+      SetDrawConstants(kVertexBank, UploadVertexShaderConstants(device_guest));
+    if (s.dirtyStates.pixelShaderConstants)
+      SetDrawConstants(kPixelBank, UploadPixelShaderConstants(device_guest));
+    SetDrawConstants(kSharedBank, UploadSharedConstants(device_guest));
+  }
+  BindDrawConstants(s.command_list);
+#else
   if (device_guest) {
     if (s.dirtyStates.vertexShaderConstants) {
       auto vs_alloc = UploadVertexShaderConstants(device_guest);
@@ -290,6 +302,7 @@ bool Video::FlushRenderStateLocked(u32 device_guest) {
 #endif
     }
   }
+#endif // REBLUE_UBO_CONSTANTS
 
   // Lens flare occlusion count: the counter UAV (root descriptor 3 on D3D12,
   // set 4 on Vulkan) for the sun test quad draw bracketed by D3DQuery_Issue

@@ -1,0 +1,183 @@
+diff --git a/XenosRecomp/dxc_compiler.cpp b/XenosRecomp/dxc_compiler.cpp
+index 4a851c2..5d20d08 100644
+--- a/XenosRecomp/dxc_compiler.cpp
++++ b/XenosRecomp/dxc_compiler.cpp
+@@ -42,6 +42,10 @@ IDxcBlob* DxcCompiler::compile(const std::string& shaderSource, bool compilePixe
+     {
+         args[argCount++] = L"-spirv";
+         args[argCount++] = L"-fvk-use-dx-layout";
++#ifdef REBLUE_SPIRV_UBO
++        // The Switch: constants in uniform buffers (shader_common.h).
++        args[argCount++] = L"-DREBLUE_UBO_CONSTANTS";
++#endif
+ 
+         if (!compilePixelShader)
+             args[argCount++] = L"-fvk-invert-y";
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index 63c37c9..46de8ef 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -31,7 +31,18 @@
+ #define FLT_MIN asfloat(0xff7fffff)
+ #define FLT_MAX asfloat(0x7f7fffff)
+ 
+-#ifdef __spirv__
++// REBLUE_UBO_CONSTANTS (the Switch build's SPIR-V): the constant banks are
++// the same cbuffers as on D3D12, as dynamic uniform buffers in set 5 (vertex
++// b0, pixel b1, shared b2), which NVK keeps in the Maxwell constant banks.
++// Without it SPIR-V reads them through device addresses in push constants,
++// one memory load per use.
++#if defined(__spirv__) && defined(REBLUE_UBO_CONSTANTS)
++#define REBLUE_CBUFFER_BINDING(b) [[vk::binding(b, 5)]]
++#else
++#define REBLUE_CBUFFER_BINDING(b)
++#endif
++
++#if defined(__spirv__) && !defined(REBLUE_UBO_CONSTANTS)
+ 
+ struct PushConstants
+ {
+@@ -68,6 +79,11 @@ struct PushConstants
+ 
+ #else
+ 
++#ifdef __spirv__
++[[vk::constant_id(0)]] const uint g_SpecConstants = 0;
++#define g_SpecConstants() g_SpecConstants
++#endif
++
+ #ifdef REBLUE_RECOMP
+ #define DEFINE_SHARED_CONSTANTS() \
+     uint4 g_BooleansArr[2] : packoffset(c16); \
+@@ -91,7 +107,9 @@ struct PushConstants
+     float g_AlphaThreshold : packoffset(c17.x);
+ #endif
+ 
++#ifndef __spirv__
+ uint g_SpecConstants();
++#endif
+ 
+ #endif
+ 
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index feaa90b..da07ad7 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1288,7 +1288,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     const auto constantTableContainer = reinterpret_cast<const ConstantTableContainer*>(shaderData + shaderContainer->constantTableOffset);
+     constantTableData = reinterpret_cast<const uint8_t*>(&constantTableContainer->constantTable);
+ 
+-    out += "#ifdef __spirv__\n\n";
++    out += "#if defined(__spirv__) && !defined(REBLUE_UBO_CONSTANTS)\n\n";
+ 
+ #ifdef UNLEASHED_RECOMP
+     bool isMetaInstancer = false;
+@@ -1399,7 +1399,31 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+     out += "\n#else\n\n";
+ 
+-    println("cbuffer {}ShaderConstants : register(b{}, space4)", isPixelShader ? "Pixel" : "Vertex", isPixelShader ? 1 : 0);
++    // Members in register order: SPIR-V (unlike DXIL) rejects a packoffset
++    // below one already laid out, and the constant table is in name order.
++    std::vector<std::pair<uint32_t, std::string>> members;
++    auto member = [&](uint32_t slot, std::string text) { members.emplace_back(slot, std::move(text)); };
++    // Two sampler names on one register (aliases): the second becomes a define
++    // for the first, as SPIR-V will not lay two members on one offset.
++    std::map<uint32_t, std::string> slotNames;
++    std::string aliases;
++    auto indexMember = [&](uint32_t slot, std::string name, uint32_t c, char swizzle)
++    {
++        auto [it, inserted] = slotNames.emplace(slot, name);
++        if (inserted)
++            member(slot, fmt::format("\tuint {} : packoffset(c{}.{});\n", name, c, swizzle));
++        else
++            aliases += fmt::format("#define {} {}\n", name, it->second);
++    };
++    auto flushMembers = [&]()
++    {
++        std::stable_sort(members.begin(), members.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
++        for (auto& m : members)
++            out += m.second;
++        members.clear();
++    };
++
++    println("REBLUE_CBUFFER_BINDING({1}) cbuffer {0}ShaderConstants : register(b{1}, space4)", isPixelShader ? "Pixel" : "Vertex", isPixelShader ? 1 : 0);
+     out += "{\n";
+ 
+     for (uint32_t i = 0; i < constantTableContainer->constantTable.constants; i++)
+@@ -1418,24 +1442,26 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+             const char* constantName = reinterpret_cast<const char*>(constantTableData + constantInfo->name);
+ 
+-            print("\tfloat4 {}", constantName);
++            std::string text = fmt::format("\tfloat4 {}", constantName);
+ 
+             if (constantInfo->registerCount > 1)
+-                print("[{}]", constantInfo->registerCount.get());
++                text += fmt::format("[{}]", constantInfo->registerCount.get());
+ 
+-            println(" : packoffset(c{});", constantInfo->registerIndex.get());
++            text += fmt::format(" : packoffset(c{});\n", constantInfo->registerIndex.get());
+ 
+             if (constantInfo->registerCount > 1)
+             {
+                 uint32_t tailCount = (isPixelShader ? 224 : 256) - constantInfo->registerIndex;
+-                println("#define {0}(INDEX) select((INDEX) < {1}, {0}[min(INDEX, {2})], 0.0)", constantName, tailCount, tailCount - 1);
++                text += fmt::format("#define {0}(INDEX) select((INDEX) < {1}, {0}[min(INDEX, {2})], 0.0)\n", constantName, tailCount, tailCount - 1);
+             }
++            member(uint32_t(constantInfo->registerIndex) * 4, std::move(text));
+         }
+     }
++    flushMembers();
+ 
+     out += "};\n\n";
+ 
+-    out += "cbuffer SharedConstants : register(b2, space4)\n";
++    out += "REBLUE_CBUFFER_BINDING(2) cbuffer SharedConstants : register(b2, space4)\n";
+     out += "{\n";
+ 
+     for (uint32_t i = 0; i < constantTableContainer->constantTable.constants; i++)
+@@ -1446,15 +1472,16 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         if (constantInfo->registerSet == RegisterSet::Sampler)
+         {
+             const char* constantName = reinterpret_cast<const char*>(constantTableData + constantInfo->name);
++            const uint32_t r = constantInfo->registerIndex;
+ 
+             for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
+             {
+-                println("\tuint {}_Texture{}DescriptorIndex : packoffset(c{}.{});",
+-                    constantName, TEXTURE_DIMENSIONS[j], j * 4 + constantInfo->registerIndex / 4, SWIZZLES[constantInfo->registerIndex % 4]);
++                indexMember(uint32_t((j * 4 + r / 4) * 4 + r % 4), fmt::format("{}_Texture{}DescriptorIndex", constantName, TEXTURE_DIMENSIONS[j]),
++                    uint32_t(j * 4 + r / 4), SWIZZLES[r % 4]);
+             }
+ 
+-            println("\tuint {}_SamplerDescriptorIndex : packoffset(c{}.{});",
+-                constantName, 4 * std::size(TEXTURE_DIMENSIONS) + constantInfo->registerIndex / 4, SWIZZLES[constantInfo->registerIndex % 4]);
++            indexMember(uint32_t((4 * std::size(TEXTURE_DIMENSIONS) + r / 4) * 4 + r % 4), fmt::format("{}_SamplerDescriptorIndex", constantName),
++                uint32_t(4 * std::size(TEXTURE_DIMENSIONS) + r / 4), SWIZZLES[r % 4]);
+         }
+     }
+ 
+@@ -1466,16 +1493,18 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             continue;
+         for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
+         {
+-            println("\tuint s{}_Texture{}DescriptorIndex : packoffset(c{}.{});",
+-                r, TEXTURE_DIMENSIONS[j], j * 4 + r / 4, SWIZZLES[r % 4]);
++            indexMember(uint32_t((j * 4 + r / 4) * 4 + r % 4), fmt::format("s{}_Texture{}DescriptorIndex", r, TEXTURE_DIMENSIONS[j]),
++                uint32_t(j * 4 + r / 4), SWIZZLES[r % 4]);
+         }
+-        println("\tuint s{}_SamplerDescriptorIndex : packoffset(c{}.{});",
+-            r, 4 * std::size(TEXTURE_DIMENSIONS) + r / 4, SWIZZLES[r % 4]);
++        indexMember(uint32_t((4 * std::size(TEXTURE_DIMENSIONS) + r / 4) * 4 + r % 4), fmt::format("s{}_SamplerDescriptorIndex", r),
++            uint32_t(4 * std::size(TEXTURE_DIMENSIONS) + r / 4), SWIZZLES[r % 4]);
+     }
+ #endif
++    flushMembers();
+ 
+     out += "\tDEFINE_SHARED_CONSTANTS();\n";
+     out += "};\n\n";
++    out += aliases;
+ 
+     out += "#endif\n";
+ 

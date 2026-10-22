@@ -17,6 +17,7 @@
 #include <rex/types.h>
 
 #include <plume_render_interface.h>
+#include <plume_render_interface_builders.h>
 
 namespace bd::gpu {
 
@@ -85,6 +86,29 @@ ConstantAllocation UploadSharedConstants(u32 device_guest);
 // Root bindings do not survive begin(), so this drops the 'shared CB still
 // bound' reuse gate. Call on every command list reset.
 void InvalidateSharedBinding();
+
+// Every file that tests REBLUE_UBO_CONSTANTS includes this header: it is 0
+// rather than undefined elsewhere, so a missing include fails loudly under
+// -Wundef instead of silently taking the push-constant path.
+#if defined(__SWITCH__) && !defined(REBLUE_D3D12)
+// The Switch: guest shaders read their three constant blocks from dynamic
+// uniform buffers in descriptor set 5 (vertex b0, pixel b1, shared b2), which
+// NVK keeps in the Maxwell constant banks, instead of through the device
+// addresses in push constants the other Vulkan builds use (one memory load per
+// constant read). Matches REBLUE_UBO_CONSTANTS in XenosRecomp's shader_common.h.
+#define REBLUE_UBO_CONSTANTS 1
+inline constexpr u32 kConstantDescriptorSetIndex = 5;
+enum ConstantBank : u32 { kVertexBank = 0, kPixelBank = 1, kSharedBank = 2 };
+
+// Adds set 5 to the main pipeline layout (BuildPipelineLayout, after set 4).
+void AddConstantDescriptorSet(plume::RenderPipelineLayoutBuilder &layout);
+// A block just uploaded for the next draw.
+void SetDrawConstants(ConstantBank bank, const ConstantAllocation &alloc);
+// Binds set 5 with the current blocks if any changed since the last bind.
+void BindDrawConstants(plume::RenderCommandList *list);
+#else
+#define REBLUE_UBO_CONSTANTS 0
+#endif
 
 // alignment defaults to 4 (the upload buffer is WRITE_COMBINE), and CBV callers
 // pass 256.

@@ -145,6 +145,16 @@ What the build does already:
   starts; the log says `native movie: ... matches the game's` and, at the
   end, how many frames came from FFmpeg. Any mismatch or failure leaves that
   movie to the game's decoder. `bd_native_movies = false` turns it off.
+- **Shader constants in uniform buffers.** On the PC's Vulkan path the game
+  shaders read their constants (lights, fog, texture and sampler indices, the
+  boolean switches) through device addresses in push constants: a memory load
+  per read, 146 of them per pixel in `bd_normal_ps`, the shader that took half
+  of the GPU time. On the Switch they are the same cbuffers as on D3D12, bound
+  as dynamic uniform buffers in descriptor set 5 (vertex b0, pixel b1, shared
+  b2), which NVK keeps in the Maxwell constant banks, as Lost Odyssey Recomp
+  does. `tools/switch/patches/xenosrecomp-switch.patch` (the host stage builds
+  XenosRecomp with `REBLUE_SPIRV_UBO`), `plume-switch.patch`
+  (`setGraphicsDescriptorSetDynamic`), and `src/gpu/constant_buffers.cpp`.
 - **Pipeline cache.** `cache/vulkan_pipelines.bin` beside the NRO keeps every
   Vulkan pipeline built so far (each one costs ~60 ms to build on NVK). The
   first run builds them, later runs read them. Delete the file to start over.

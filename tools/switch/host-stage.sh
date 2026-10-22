@@ -67,6 +67,9 @@ apply_chain() { # <dir> <patch>...
 P="$root/tools/switch/patches"
 apply_chain thirdparty/plume "$P/plume-switch.patch"
 apply_chain thirdparty/plume/contrib/volk "$P/volk-switch.patch"
+# The shader recompiler: on the Switch the constant banks are uniform buffers
+# (REBLUE_SPIRV_UBO below), and the cbuffers SPIR-V needs for that.
+apply_chain thirdparty/XenosRecomp "$P/xenosrecomp-switch.patch"
 
 log "SDK third-party sources"
 python3 tools/switch/fetch_thirdparty.py
@@ -120,7 +123,7 @@ log "Host XenosRecomp"
 cmake -S thirdparty/XenosRecomp -B "$host/xenos" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX \
-    -DCMAKE_C_FLAGS="$HOST_FLAGS" -DCMAKE_CXX_FLAGS="$HOST_FLAGS -DREBLUE_RECOMP"
+    -DCMAKE_C_FLAGS="$HOST_FLAGS" -DCMAKE_CXX_FLAGS="$HOST_FLAGS -DREBLUE_RECOMP -DREBLUE_SPIRV_UBO"
 cmake --build "$host/xenos" --target XenosRecomp -j "$JOBS"
 xenos="$host/xenos/XenosRecomp/XenosRecomp"
 [ -x "$xenos" ] || die "XenosRecomp was not built"
