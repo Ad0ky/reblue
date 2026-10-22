@@ -256,7 +256,8 @@ CapRef PadCap(Action action, u32 set) {
   for (const Source &s : Bindings::Get().Sources(action)) {
     if (s.kind != SourceKind::PadButton)
       continue;
-    const auto button = static_cast<Button>(s.code);
+    const auto button = static_cast<Button>(
+        ArtButton(static_cast<PadSet>(set), int(s.code)));
     switch (button) {
     case Button::A:
     case Button::B:

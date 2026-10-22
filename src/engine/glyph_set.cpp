@@ -15,6 +15,7 @@
 #include <rex/graphics/pipeline/texture/conversion.h>
 #include <rex/graphics/pipeline/texture/util.h>
 #include <rex/graphics/xenos.h>
+#include <rex/cvar.h>
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/ui/keybinds.h>
@@ -43,6 +44,11 @@ REX_IMPORT(__imp__AnimeVarBag_FindVar, GlyphFindVar, u32(u32, u32));
 // rebuild for nothing.
 REX_IMPORT(__imp__AnimeVar_nearby_D008, GlyphCommitVar, u32(u32));
 REX_EXTERN(__imp__bdUiCharUvCacheInit);
+
+#if defined(__SWITCH__)
+// The SDK's Switch input driver: face buttons by position instead of letter.
+REXCVAR_DECLARE(bool, input_xbox_layout);
+#endif
 
 namespace bd::engine {
 
@@ -226,10 +232,10 @@ int PadSetIndex(int padButton) {
   return -1;
 }
 
-int PadGlyphIndex(Action action) {
+int PadGlyphIndex(PadSet pad, Action action) {
   for (const Source &s : Bindings::Get().Sources(action)) {
     if (s.kind == SourceKind::PadButton)
-      return PadSetIndex(int(s.code));
+      return PadSetIndex(ArtButton(pad, int(s.code)));
   }
   return -1;
 }
@@ -240,7 +246,13 @@ int PadSetCell(PadSet pad, int idx) {
 
 int PadArtCell(PadSet pad, int cellIndex) {
   const GlyphCell &c = kCells[cellIndex];
-  const int idx = c.action == kNoAction ? cellIndex : PadGlyphIndex(c.action);
+  int idx;
+  if (c.action != kNoAction)
+    idx = PadGlyphIndex(pad, c.action);
+  else if (c.padButton >= 0)
+    idx = PadSetIndex(ArtButton(pad, c.padButton));
+  else
+    idx = cellIndex;
   return idx < 0 ? kBlankCell : PadSetCell(pad, idx);
 }
 
@@ -287,6 +299,26 @@ int BoundKeyIndex(Action action) {
     return name.empty() ? -1 : KeyIndex(name);
   }
   return -1;
+}
+
+int ArtButton([[maybe_unused]] PadSet set, int padButton) {
+#if defined(__SWITCH__)
+  if (set == PadSet::Switch && !REXCVAR_GET(input_xbox_layout)) {
+    switch (padButton) {
+    case 8: // A
+      return 9;
+    case 9: // B
+      return 8;
+    case 10: // X
+      return 11;
+    case 11: // Y
+      return 10;
+    default:
+      break;
+    }
+  }
+#endif
+  return padButton;
 }
 
 const char *ToString(GlyphSet set) {
@@ -428,7 +460,7 @@ std::vector<u8> Glyphs::SheetPixels() {
 }
 
 int Glyphs::PadSheetCell(int padButton) const {
-  const int idx = PadSetIndex(padButton);
+  const int idx = PadSetIndex(ArtButton(pad_, padButton));
   return idx < 0 ? -1 : PadSetCell(pad_, idx);
 }
 

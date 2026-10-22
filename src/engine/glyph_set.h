@@ -43,6 +43,13 @@ inline constexpr i32 kPadSetLast = static_cast<i32>(PadSet::SteamDeck);
 const char *ToString(GlyphSet set);
 const char *ToString(PadSet set);
 
+// The pad button whose cap to draw for 'padButton' in 'set''s art. The
+// Switch art is drawn for the PC, where SDL reports a Switch pad's face
+// buttons by position (the bottom one, labelled B, is the Xbox A). On the
+// console the face buttons go by letter (the SDK's input_xbox_layout off,
+// its default), so there the A/B and X/Y caps trade places.
+int ArtButton(PadSet set, int padButton);
+
 int BoundKeyIndex(Action action);
 
 // The same lookup for a bare key name ("Up", "LMB"), with any modifier prefix
