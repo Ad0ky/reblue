@@ -21,6 +21,7 @@
 #include "gpu/backend.h"
 #include "gpu/constant_buffers.h"
 #include "gpu/format.h"
+#include "gpu/pass_timer.h"
 #include "gpu/pipeline/pipeline_cache.h"
 #include "gpu/pipeline/pso_recorder.h"
 
@@ -323,6 +324,10 @@ bool Video::FlushRenderStateLocked(u32 device_guest) {
   }
 
   s.dirtyStates = DirtyStates(false);
+  // Switch: per-shader GPU timestamps on the timed frames (pass_timer.h).
+  pass_timer::MarkDraw(s.command_list, s.frame.load(std::memory_order_relaxed),
+                       s.pipelineState.vertexShader,
+                       s.pipelineState.pixelShader);
   return true;
 }
 

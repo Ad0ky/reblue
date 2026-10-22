@@ -157,6 +157,11 @@ How to measure on the console:
 - `[gpu-passes]` lines, every 10 s: GPU time per frame from timestamps, and
   the passes that cost the most, named by their render target (size and
   format), with how often each runs per frame.
+- `[gpu-shaders]` lines, every 10 s: one frame in 8 is timed per shader (a
+  timestamp at every change of shaders between draws), and the pixel shaders
+  that cost the most GPU time per frame are listed by their shader cache hash
+  (the file name in the HLSL dump, `reblue_shader_hlsl_dump`), with draws per
+  frame, the main vertex shader and the render target.
 - `logs/rex/rex_perfil.log` (the SDK profiler) has CPU per thread every 10 s.
   For where each thread spends its time, create an empty file
   `sdmc:/switch/reblue/logs/rex/perfil_pilas.flag`: the profiler then samples
