@@ -33,6 +33,9 @@
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
 #endif
+#if defined(__aarch64__) || defined(_M_ARM64)
+#include <arm_neon.h>
+#endif
 
 namespace bd::gpu {
 
@@ -204,6 +207,30 @@ void CopyByteSwap32Impl(u8 *dst, u32 guest_va, u32 size) {
       v = _mm_andnot_si128(is_nan, v);
     }
     _mm_storeu_si128(reinterpret_cast<__m128i *>(out + i), v);
+  }
+#elif defined(__aarch64__) || defined(_M_ARM64)
+  // The Switch: the scalar loop was ~13% of the draw thread, and the stores
+  // go to the upload chunk's write-combined memory, where 16-byte stores
+  // matter as much as the swap.
+  const uint32x4_t abs_mask = vdupq_n_u32(0x7FFFFFFFu);
+  const uint32x4_t inf_bits = vdupq_n_u32(0x7F800000u);
+  for (; i + 16 <= count; i += 16) {
+    uint32x4_t v[4];
+    for (int k = 0; k < 4; ++k) {
+      v[k] = vreinterpretq_u32_u8(
+          vrev32q_u8(vld1q_u8(reinterpret_cast<const u8 *>(src + i + 4 * k))));
+      if constexpr (kFlushNaN)
+        v[k] = vbicq_u32(v[k], vcgtq_u32(vandq_u32(v[k], abs_mask), inf_bits));
+    }
+    for (int k = 0; k < 4; ++k)
+      vst1q_u32(out + i + 4 * k, v[k]);
+  }
+  for (; i + 4 <= count; i += 4) {
+    uint32x4_t v = vreinterpretq_u32_u8(
+        vrev32q_u8(vld1q_u8(reinterpret_cast<const u8 *>(src + i))));
+    if constexpr (kFlushNaN)
+      v = vbicq_u32(v, vcgtq_u32(vandq_u32(v, abs_mask), inf_bits));
+    vst1q_u32(out + i, v);
   }
 #endif
   for (; i < count; ++i) {
