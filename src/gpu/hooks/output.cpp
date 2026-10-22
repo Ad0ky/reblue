@@ -96,6 +96,15 @@ bool ScaleDesignDims(f64 &w, f64 &h) {
   const f64 s = Output::ViewScale();
   if (s == 1.0)
     return false;
+  // Scaling down (the Switch handheld render): only the full design canvas,
+  // so a size that is already scaled is not scaled again. The field's
+  // depth-of-field view gets its texture size from the view (scaled at
+  // creation) and comes back through bdFreeDfsViewTextureSizeHook; scaling up
+  // is protected by the check above instead.
+  if (s < 1.0 &&
+      (std::fabs(w - kDesignCanvasWidth) > 0.5 ||
+       std::fabs(h - kDesignCanvasHeight) > 0.5))
+    return false;
   w *= s;
   h *= s;
   return true;

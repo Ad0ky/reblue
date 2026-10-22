@@ -256,6 +256,15 @@ std::string DescribeBackend(plume::RenderDevice *device) {
 
 plume::RenderFormat
 PickDepthStencilFormat([[maybe_unused]] plume::RenderDevice *device) {
+#if defined(__SWITCH__)
+  // The Tegra X1 is the same NVIDIA family the D3D12 branch below picks
+  // D24S8 for, with a 25.6 GB/s memory bus shared with the CPU: half the
+  // depth bytes of D32S8 per sample.
+  if (device->getSampleCountsSupported(plume::RenderFormat::D24_UNORM_S8_UINT) &
+      plume::RenderSampleCount::COUNT_1) {
+    return plume::RenderFormat::D24_UNORM_S8_UINT;
+  }
+#endif
 #if defined(REBLUE_D3D12)
   const auto vendor = device->getDescription().vendor;
   if ((vendor == plume::RenderDeviceVendor::NVIDIA ||
