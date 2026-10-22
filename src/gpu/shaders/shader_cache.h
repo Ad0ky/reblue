@@ -49,4 +49,7 @@ extern const uint32_t g_shaderCacheUboSpirv[];
 extern const uint8_t g_compressedSpirvUboCache[];
 extern const size_t g_spirvUboCacheCompressedSize;
 extern const size_t g_spirvUboCacheDecompressedSize;
+// Per entry: bytes of the float constant block the shader reads (the whole
+// 4096 when it indexes an array).
+extern const uint16_t g_shaderCacheFloatConstantBytes[];
 #endif

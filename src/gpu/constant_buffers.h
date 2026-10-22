@@ -21,6 +21,8 @@
 
 namespace bd::gpu {
 
+struct GuestShader;
+
 // Mirror of the SharedConstants cbuffer (b2, space4). Layout matches the
 // packoffset(c<N>) emit in the recompiled shader prelude, so reordering or
 // resizing means regenerating every shader in the DXIL cache.
@@ -74,8 +76,17 @@ void ResetFrame(u32 slot);
 
 // Byte-swap VS/PS float constants from guest device+0x700 / device+0x1700 into
 // the upload heap.
-ConstantAllocation UploadVertexShaderConstants(u32 device_guest);
-ConstantAllocation UploadPixelShaderConstants(u32 device_guest);
+// 'bytes': how much of the 4 KiB block to copy (FloatConstantBytes); the
+// rest of the allocation's 4 KiB window is left as it was.
+ConstantAllocation UploadVertexShaderConstants(u32 device_guest,
+                                               u32 bytes = 4096);
+ConstantAllocation UploadPixelShaderConstants(u32 device_guest,
+                                              u32 bytes = 4096);
+
+// The bytes of the float constant block 'shader' reads: on the Switch from
+// the shader cache (most pixel shaders read under 1 KiB of the 4), elsewhere
+// and for shaders without an entry the whole block.
+u32 FloatConstantBytes(const GuestShader *shader);
 
 // Rebuilt from live guest state every draw: sampler fetch constants and bool
 // constants come from unhooked recompiled code, so there is no dirty signal.

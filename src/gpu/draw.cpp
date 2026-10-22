@@ -251,8 +251,16 @@ bool Video::FlushRenderStateLocked(u32 device_guest) {
   // emitted by the recompiler.
   if (device_guest) {
     ConstantAllocation vs_alloc{}, ps_alloc{};
-    if (s.dirtyStates.vertexShaderConstants) {
-      vs_alloc = UploadVertexShaderConstants(device_guest);
+    // Only the part of each block the bound shader reads is copied
+    // (FloatConstantBytes). A clean block is still re-uploaded when the new
+    // shader reads further than the last upload covered. The command list
+    // reset force-dirties both, so the coverage restarts with it.
+    static u32 vs_covered = 0, ps_covered = 0;
+    const u32 vs_bytes = FloatConstantBytes(s.pipelineState.vertexShader);
+    const u32 ps_bytes = FloatConstantBytes(s.pipelineState.pixelShader);
+    if (s.dirtyStates.vertexShaderConstants || vs_bytes > vs_covered) {
+      vs_alloc = UploadVertexShaderConstants(device_guest, vs_bytes);
+      vs_covered = vs_alloc.size ? vs_bytes : 0;
       if (vs_alloc.size) {
 #if defined(REBLUE_D3D12)
         s.command_list->setGraphicsRootDescriptor(vs_alloc.ref, 0);
@@ -263,8 +271,9 @@ bool Video::FlushRenderStateLocked(u32 device_guest) {
       }
     }
 
-    if (s.dirtyStates.pixelShaderConstants) {
-      ps_alloc = UploadPixelShaderConstants(device_guest);
+    if (s.dirtyStates.pixelShaderConstants || ps_bytes > ps_covered) {
+      ps_alloc = UploadPixelShaderConstants(device_guest, ps_bytes);
+      ps_covered = ps_alloc.size ? ps_bytes : 0;
       if (ps_alloc.size) {
 #if defined(REBLUE_D3D12)
         s.command_list->setGraphicsRootDescriptor(ps_alloc.ref, 1);

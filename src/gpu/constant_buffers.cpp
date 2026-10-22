@@ -115,10 +115,13 @@ bool CreateChunk(UploadChunk &chunk) {
   auto *device = bd::gpu::Video::HostDevice();
   if (!device)
     return false;
+  // One constant block of slack past the allocator's end: a uniform-buffer
+  // binding reads a whole 4 KiB window from its offset (BindDrawConstants)
+  // even when less was uploaded there.
   chunk.buffer = bd::gpu::CreateHostBuffer(
       device,
       plume::RenderBufferDesc::UploadBuffer(
-          kUploadChunkSize, plume::RenderBufferFlag::CONSTANT |
+          kUploadChunkSize + kConstantBlockBytes, plume::RenderBufferFlag::CONSTANT |
                                 plume::RenderBufferFlag::VERTEX |
                                 plume::RenderBufferFlag::INDEX |
                                 plume::RenderBufferFlag::DEVICE_ADDRESSABLE),
@@ -302,10 +305,11 @@ void InvalidateSharedBinding() {
 #if REBLUE_UBO_CONSTANTS
 }  // namespace bd::gpu
 
-REXCVAR_DEFINE_BOOL(bd_switch_ubo_constants, false, "Switch",
+REXCVAR_DEFINE_BOOL(bd_switch_ubo_constants, true, "Switch",
                     "Guest shader constants in uniform buffers (descriptor set "
-                    "5, the GPU's constant banks) instead of device addresses. "
-                    "Experimental. Read at start.");
+                    "5, the GPU's constant banks) instead of device addresses: "
+                    "~40% less GPU time in the field's main shader. Read at "
+                    "start; delete cache/vulkan_pipelines.bin when changing it.");
 
 namespace bd::gpu {
 
@@ -475,7 +479,27 @@ void PinScreenUVScaleReg(u8 *block) {
   }
 }
 
-ConstantAllocation UploadVertexShaderConstants(u32 device_guest) {
+u32 FloatConstantBytes(const GuestShader *shader) {
+#if defined(__SWITCH__)
+  if (shader && shader->shaderCacheEntry) {
+    const size_t index = size_t(shader->shaderCacheEntry - g_shaderCacheEntries);
+    if (index < g_shaderCacheEntryCount) {
+      const u32 bytes = g_shaderCacheFloatConstantBytes[index];
+      // PinScreenUVScaleReg writes a register of its own.
+      if (shader->shaderCacheEntry->hash == kBDBlurPSHash)
+        return std::max(bytes, kScreenUVScaleRegByteOffset + 16);
+      return std::min(std::max(bytes, 16u), kConstantBlockBytes);
+    }
+  }
+#else
+  (void)shader;
+#endif
+  return kConstantBlockBytes;
+}
+
+// The allocation is always the whole 4 KiB block (the D3D12 root CBV and the
+// uniform-buffer window read that much); only the first 'bytes' are written.
+ConstantAllocation UploadVertexShaderConstants(u32 device_guest, u32 bytes) {
   BD_CPU_ZONE("UploadVSConstants");
   auto &s = upload_state();
   if (!device_guest)
@@ -485,11 +509,11 @@ ConstantAllocation UploadVertexShaderConstants(u32 device_guest) {
     return {};
   CopyByteSwap32FlushNaN(alloc.memory,
                          device_guest + offsetof(D3DDevice, vsFloatConstants),
-                         kConstantBlockBytes);
+                         std::min(bytes, kConstantBlockBytes));
   return alloc;
 }
 
-ConstantAllocation UploadPixelShaderConstants(u32 device_guest) {
+ConstantAllocation UploadPixelShaderConstants(u32 device_guest, u32 bytes) {
   BD_CPU_ZONE("UploadPSConstants");
   auto &s = upload_state();
   if (!device_guest)
@@ -499,7 +523,7 @@ ConstantAllocation UploadPixelShaderConstants(u32 device_guest) {
     return {};
   CopyByteSwap32FlushNaN(alloc.memory,
                          device_guest + offsetof(D3DDevice, psFloatConstants),
-                         kConstantBlockBytes);
+                         std::min(bytes, kConstantBlockBytes));
   PinScreenUVScaleReg(alloc.memory);
   return alloc;
 }

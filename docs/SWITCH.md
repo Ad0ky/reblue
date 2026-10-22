@@ -155,11 +155,21 @@ What the build does already:
   does. `tools/switch/patches/xenosrecomp-switch.patch` (the host stage builds
   XenosRecomp with `REBLUE_SPIRV_UBO`), `plume-switch.patch`
   (`setGraphicsDescriptorSetDynamic`), and `src/gpu/constant_buffers.cpp`.
-  **Off by default** (`bd_switch_ubo_constants = false`): the first console run
-  lost the GPU at start. The NRO carries both SPIR-V caches; with the setting
-  on, `rex_stderr.log` gets `[ubo]` lines (the descriptor sets made, the first
-  binds and their offsets, every bind that fails). Delete
-  `cache/vulkan_pipelines.bin` when switching it.
+  `bd_switch_ubo_constants` (on by default) picks it; the NRO carries both
+  SPIR-V caches, so `false` goes back to device addresses. Delete
+  `cache/vulkan_pipelines.bin` when switching it. The device addresses are
+  pushed in both modes: re:Blue's own substitute shaders (`hlsl/`) read
+  through them. `rex_stderr.log` gets `[ubo]` lines (descriptor sets made,
+  the first binds, every bind that fails). Measured in the field at 460 MHz:
+  `bd_normal_ps` 29.5 -> 17.6 ms, GPU 60 -> 40 ms per frame.
+- **Smaller constant uploads.** XenosRecomp records how much of the 4 KiB
+  float constant block each shader reads (`g_shaderCacheFloatConstantBytes`);
+  only that part is byte-swapped (NEON) into the upload, and a clean block is
+  re-uploaded only when the next shader reads further. Most pixel shaders read
+  under 1 KiB; vertex shaders with indexed arrays read all of it.
+- **Lookup caches.** The guest resource registry and the vertex/index buffer
+  struct map answer from a per-thread cache (`gpu/lookup_cache.h`), dropped
+  on any change to the map, instead of a mutex and a hash probe per draw.
 - **Pipeline cache.** `cache/vulkan_pipelines.bin` beside the NRO keeps every
   Vulkan pipeline built so far (each one costs ~60 ms to build on NVK). The
   first run builds them, later runs read them. Delete the file to start over.

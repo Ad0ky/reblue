@@ -34,21 +34,32 @@ index d49bd32..3324b68 100644
 +    IDxcBlob* compile(const std::string& shaderSource, bool compilePixelShader, bool compileLibrary, bool compileSpirv, bool uboConstants = false);
  };
 diff --git a/XenosRecomp/main.cpp b/XenosRecomp/main.cpp
-index 754198c..1f783dd 100644
+index 754198c..e00ff2e 100644
 --- a/XenosRecomp/main.cpp
 +++ b/XenosRecomp/main.cpp
-@@ -29,6 +29,10 @@ struct RecompiledShader
+@@ -29,6 +29,11 @@ struct RecompiledShader
      uint8_t* data = nullptr;
      IDxcBlob* dxil = nullptr;
      std::vector<uint8_t> spirv;
 +#ifdef REBLUE_SPIRV_UBO
 +    // The same shader with its constants in uniform buffers (REBLUE_UBO_CONSTANTS).
 +    std::vector<uint8_t> spirvUbo;
++    uint32_t floatConstantBytes = 0;
 +#endif
      uint32_t specConstantsMask = 0;
      std::string sourceName;
  };
-@@ -209,6 +213,22 @@ int main(int argc, char** argv)
+@@ -160,6 +165,9 @@ int main(int argc, char** argv)
+                 recompiler.recompile(shader.data, include);
+ 
+                 shader.specConstantsMask = recompiler.specConstantsMask;
++#ifdef REBLUE_SPIRV_UBO
++                shader.floatConstantBytes = recompiler.floatConstantBytes;
++#endif
+ 
+                 if (!hlslDumpDir.empty())
+                 {
+@@ -209,6 +217,22 @@ int main(int argc, char** argv)
  
                  spirv->Release();
  
@@ -71,35 +82,39 @@ index 754198c..1f783dd 100644
                  size_t currentProgress = ++progress;
                  if ((currentProgress % 10) == 0 || (currentProgress == shaders.size() - 1))
                      fmt::println("Recompiling shaders... {}%", currentProgress / float(shaders.size()) * 100.0f);
-@@ -234,6 +254,10 @@ int main(int argc, char** argv)
+@@ -234,6 +258,11 @@ int main(int argc, char** argv)
  
          std::vector<uint8_t> dxil;
          std::vector<uint8_t> spirv;
 +#ifdef REBLUE_SPIRV_UBO
 +        std::vector<uint8_t> spirvUbo;
 +        std::string uboTable = "const uint32_t g_shaderCacheUboSpirv[] = {";
++        std::string bytesTable = "const uint16_t g_shaderCacheFloatConstantBytes[] = {";
 +#endif
  
          for (auto& [hash, shader] : shaders)
          {
-@@ -247,6 +271,10 @@ int main(int argc, char** argv)
+@@ -247,6 +276,11 @@ int main(int argc, char** argv)
              }
              
              spirv.insert(spirv.end(), shader.spirv.begin(), shader.spirv.end());
 +#ifdef REBLUE_SPIRV_UBO
 +            uboTable += fmt::format("{},{},", spirvUbo.size(), shader.spirvUbo.size());
++            bytesTable += fmt::format("{},", shader.floatConstantBytes);
 +            spirvUbo.insert(spirvUbo.end(), shader.spirvUbo.begin(), shader.spirvUbo.end());
 +#endif
          }
  
          f.println("}};");
-@@ -285,6 +313,19 @@ int main(int argc, char** argv)
+@@ -285,6 +319,21 @@ int main(int argc, char** argv)
          f.println("const size_t g_spirvCacheDecompressedSize = {};", spirv.size());
          f.println("const size_t g_shaderCacheEntryCount = {};", shaders.size());
  
 +#ifdef REBLUE_SPIRV_UBO
 +        // Offset and size of each entry's uniform-buffer SPIR-V, in entry order.
 +        f.println("{}}};", uboTable);
++        // Per entry: bytes of the float constant block it reads.
++        f.println("{}}};", bytesTable);
 +        std::vector<uint8_t> uboCompressed(ZSTD_compressBound(spirvUbo.size()));
 +        uboCompressed.resize(ZSTD_compress(uboCompressed.data(), uboCompressed.size(), spirvUbo.data(), spirvUbo.size(), level));
 +        f.print("const uint8_t g_compressedSpirvUboCache[] = {{");
@@ -160,7 +175,7 @@ index 63c37c9..46de8ef 100644
  #endif
  
 diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
-index feaa90b..da07ad7 100644
+index feaa90b..5dd4add 100644
 --- a/XenosRecomp/shader_recompiler.cpp
 +++ b/XenosRecomp/shader_recompiler.cpp
 @@ -1288,7 +1288,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
@@ -172,7 +187,18 @@ index feaa90b..da07ad7 100644
  
  #ifdef UNLEASHED_RECOMP
      bool isMetaInstancer = false;
-@@ -1399,7 +1399,31 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+@@ -1333,6 +1333,10 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         {
+             const char* shaderName = isPixelShader ? "Pixel" : "Vertex";
+ 
++            floatConstantBytes = std::max(floatConstantBytes, constantInfo->registerCount > 1
++                ? 256u * 16u
++                : (uint32_t(constantInfo->registerIndex) + uint32_t(constantInfo->registerCount)) * 16u);
++
+             if (constantInfo->registerCount > 1)
+             {
+                 uint32_t tailCount = (isPixelShader ? 224 : 256) - constantInfo->registerIndex;
+@@ -1399,7 +1403,31 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
  
      out += "\n#else\n\n";
  
@@ -205,7 +231,7 @@ index feaa90b..da07ad7 100644
      out += "{\n";
  
      for (uint32_t i = 0; i < constantTableContainer->constantTable.constants; i++)
-@@ -1418,24 +1442,26 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+@@ -1418,24 +1446,26 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
  
              const char* constantName = reinterpret_cast<const char*>(constantTableData + constantInfo->name);
  
@@ -237,7 +263,7 @@ index feaa90b..da07ad7 100644
      out += "{\n";
  
      for (uint32_t i = 0; i < constantTableContainer->constantTable.constants; i++)
-@@ -1446,15 +1472,16 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+@@ -1446,15 +1476,16 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
          if (constantInfo->registerSet == RegisterSet::Sampler)
          {
              const char* constantName = reinterpret_cast<const char*>(constantTableData + constantInfo->name);
@@ -258,7 +284,7 @@ index feaa90b..da07ad7 100644
          }
      }
  
-@@ -1466,16 +1493,18 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+@@ -1466,16 +1497,18 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
              continue;
          for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
          {
@@ -281,3 +307,18 @@ index feaa90b..da07ad7 100644
  
      out += "#endif\n";
  
+diff --git a/XenosRecomp/shader_recompiler.h b/XenosRecomp/shader_recompiler.h
+index 791def7..bbda17a 100644
+--- a/XenosRecomp/shader_recompiler.h
++++ b/XenosRecomp/shader_recompiler.h
+@@ -36,6 +36,10 @@ struct ShaderRecompiler : StringBuffer
+     // emitted (then-branch close is part of the event, not ifEndLabels).
+     std::unordered_set<uint32_t> elseLabels;
+     uint32_t specConstantsMask = 0;
++    // Bytes of the float constant block the shader can read: the end of its
++    // highest float4 constant, or the whole block when it has an array (an
++    // indexed read may go past the declared count). Lets the host upload less.
++    uint32_t floatConstantBytes = 0;
+ 
+ #ifdef UNLEASHED_RECOMP
+     bool hasMtxProjection = false;

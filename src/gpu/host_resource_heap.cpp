@@ -13,6 +13,8 @@
 #include <shared_mutex>
 #include <unordered_map>
 
+#include "gpu/lookup_cache.h"
+
 namespace bd::gpu {
 
 namespace {
@@ -36,30 +38,50 @@ using RegistryReadLock = std::shared_lock<std::shared_mutex>;
 #endif
 RegistryMutex g_registry_mutex;
 std::unordered_map<u32, ResourceType> g_registry;
+LookupGeneration g_registry_gen;
+
+struct RegistryAnswer {
+  bool found = false;
+  ResourceType type{};
+};
+
+// The map lookup through the per-thread cache (lookup_cache.h).
+RegistryAnswer Lookup(u32 guest_va) {
+  thread_local LookupCache<RegistryAnswer> cache;
+  RegistryAnswer answer;
+  if (cache.Find(guest_va, g_registry_gen.Load(), &answer))
+    return answer;
+  RegistryReadLock lock(g_registry_mutex);
+  auto it = g_registry.find(guest_va);
+  if (it != g_registry.end())
+    answer = {true, it->second};
+  cache.Put(guest_va, g_registry_gen.Load(), answer);
+  return answer;
+}
 
 } // namespace
 
 void HostResourceHeap::Register(u32 guest_va, ResourceType type) {
   std::unique_lock lock(g_registry_mutex);
   g_registry[guest_va] = type;
+  g_registry_gen.Bump();
 }
 
 void HostResourceHeap::Unregister(u32 guest_va) {
   std::unique_lock lock(g_registry_mutex);
   g_registry.erase(guest_va);
+  g_registry_gen.Bump();
 }
 
 bool HostResourceHeap::IsRegistered(u32 guest_va) {
-  RegistryReadLock lock(g_registry_mutex);
-  return g_registry.count(guest_va) != 0;
+  return Lookup(guest_va).found;
 }
 
 bool HostResourceHeap::GetType(u32 guest_va, ResourceType *out_type) {
-  RegistryReadLock lock(g_registry_mutex);
-  auto it = g_registry.find(guest_va);
-  if (it == g_registry.end())
+  const RegistryAnswer answer = Lookup(guest_va);
+  if (!answer.found)
     return false;
-  *out_type = it->second;
+  *out_type = answer.type;
   return true;
 }
 

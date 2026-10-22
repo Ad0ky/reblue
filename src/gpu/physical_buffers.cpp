@@ -22,6 +22,8 @@
 #include <plume_render_interface.h>
 #include <plume_render_interface_builders.h>
 
+#include "gpu/lookup_cache.h"
+
 #include <rex/hook.h>
 #include <rex/ppc.h>
 #include <rex/runtime.h>
@@ -50,6 +52,9 @@ std::unordered_map<u32, PhysicalBufferRecord> g_physicalBuffers;
 // SetStreamSource get the struct VA, never a HostResourceHeap::Alloc'd one, so
 // FromGuest misses. Struct address reuse for a different base_va is unhandled.
 std::unordered_map<u32, bd::gpu::GuestBuffer *> g_physicalBufferStructs;
+// Bumped with g_physicalBuffersMutex held on every change to
+// g_physicalBufferStructs (FindPhysicalBufferByStruct's per-thread cache).
+bd::gpu::LookupGeneration g_physicalBufferStructsGen;
 
 // Parked rather than freed inline: a prior frame's command list may still
 // reference them. DrainBufferGraveyard frees them post-fence.
@@ -196,6 +201,7 @@ void RememberBufferStruct(u32 struct_va, bd::gpu::GuestBuffer *buf) {
     return;
   std::lock_guard lock(g_physicalBuffersMutex);
   g_physicalBufferStructs[struct_va] = buf;
+  g_physicalBufferStructsGen.Bump();
 }
 
 // --- Block helpers. All require the caller to hold g_physicalBuffersMutex. ---
@@ -310,8 +316,10 @@ bd::gpu::GuestBuffer *TryRegisterBlockMesh(u32 struct_va, u32 base_va, u32 size,
       *a, base_va, size, rtype, element_size, format);
   if (!view)
     return nullptr;
-  if (struct_va)
+  if (struct_va) {
     g_physicalBufferStructs[struct_va] = view;
+    g_physicalBufferStructsGen.Bump();
+  }
   return view;
 }
 
@@ -360,10 +368,12 @@ void EvictPhysicalBuffersInBlock(u32 block_base, u32 block_size) {
       // match by value not range. Drop them before the owning record dies.
       for (auto sit = g_physicalBufferStructs.begin();
            sit != g_physicalBufferStructs.end();) {
-        if (sit->second == gb)
+        if (sit->second == gb) {
           sit = g_physicalBufferStructs.erase(sit);
-        else
+          g_physicalBufferStructsGen.Bump();
+        } else {
           ++sit;
+        }
       }
       freed_bytes += gb->dataSize;
       if (gb->buffer) {
@@ -384,10 +394,12 @@ void EvictPhysicalBuffersInBlock(u32 block_base, u32 block_size) {
         plume::RenderBuffer *block_buf = block.buffer.get();
         for (auto sit = g_physicalBufferStructs.begin();
              sit != g_physicalBufferStructs.end();) {
-          if (sit->second && sit->second->blockBuffer == block_buf)
+          if (sit->second && sit->second->blockBuffer == block_buf) {
             sit = g_physicalBufferStructs.erase(sit);
-          else
+            g_physicalBufferStructsGen.Bump();
+          } else {
             ++sit;
+          }
         }
         freed_bytes += block.size;
         block_buffers = 1;
@@ -425,9 +437,15 @@ namespace bd::gpu {
 bd::gpu::GuestBuffer *FindPhysicalBufferByStruct(u32 struct_va) {
   if (!struct_va)
     return nullptr;
+  thread_local bd::gpu::LookupCache<bd::gpu::GuestBuffer *> cache;
+  bd::gpu::GuestBuffer *buf = nullptr;
+  if (cache.Find(struct_va, g_physicalBufferStructsGen.Load(), &buf))
+    return buf;
   std::lock_guard lock(g_physicalBuffersMutex);
   auto it = g_physicalBufferStructs.find(struct_va);
-  return (it != g_physicalBufferStructs.end()) ? it->second : nullptr;
+  buf = (it != g_physicalBufferStructs.end()) ? it->second : nullptr;
+  cache.Put(struct_va, g_physicalBufferStructsGen.Load(), buf);
+  return buf;
 }
 
 // Rebuild a GuestBuffer from a fully initialized X360 D3DIndexBuffer /
