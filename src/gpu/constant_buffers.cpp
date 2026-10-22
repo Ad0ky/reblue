@@ -8,12 +8,15 @@
 #include "gpu/constant_buffers.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
 #include <cstddef>
 #include <cstring>
 #include <memory>
 #include <vector>
 
 #include <plume_render_interface_builders.h>
+#include <rex/cvar.h>
 #include <rex/runtime.h>
 #include <rex/types.h>
 
@@ -270,6 +273,27 @@ void InvalidateSharedBinding() {
 }
 
 #if REBLUE_UBO_CONSTANTS
+}  // namespace bd::gpu
+
+REXCVAR_DEFINE_BOOL(bd_switch_ubo_constants, false, "Switch",
+                    "Guest shader constants in uniform buffers (descriptor set "
+                    "5, the GPU's constant banks) instead of device addresses. "
+                    "Experimental. Read at start.");
+
+namespace bd::gpu {
+
+bool UboConstantsEnabled() {
+  static const bool enabled = [] {
+    const bool on = REXCVAR_GET(bd_switch_ubo_constants);
+    BD_INFO("Switch: guest shader constants through {}",
+            on ? "uniform buffers (set 5)" : "device addresses");
+    std::fprintf(stderr, "[ubo] guest shader constants through %s\n",
+                 on ? "uniform buffers (set 5)" : "device addresses");
+    return on;
+  }();
+  return enabled;
+}
+
 namespace {
 
 constexpr u32 kBankBytes[3] = {kConstantBlockBytes, kConstantBlockBytes,
@@ -304,10 +328,24 @@ void SetDrawConstants(ConstantBank bank, const ConstantAllocation &alloc) {
   s.drawBlocksChanged = true;
 }
 
+// Why a bind did not happen, to stderr (written at once, unlike the log): a
+// draw without set 5 reads constants from nowhere and can hang the GPU.
+void BindFailed(const char *why) {
+  static std::atomic<u32> count{0};
+  const u32 n = count.fetch_add(1, std::memory_order_relaxed);
+  if (n < 20 || (n & (n - 1)) == 0)
+    std::fprintf(stderr, "[ubo] set 5 not bound (#%u): %s\n", n, why);
+}
+
 void BindDrawConstants(plume::RenderCommandList *list) {
   auto &s = upload_state();
-  if (!s.drawBlocksChanged || !list || !s.haveConstantSetBuilder || !s.ready)
+  if (!s.drawBlocksChanged)
     return;
+  if (!list || !s.haveConstantSetBuilder || !s.ready) {
+    BindFailed(!list ? "no command list"
+                     : !s.haveConstantSetBuilder ? "no set layout" : "not ready");
+    return;
+  }
 
   // A bank nothing was uploaded for yet reads zeros rather than leaving set 5
   // unbound for a pipeline that uses it.
@@ -316,8 +354,10 @@ void BindDrawConstants(plume::RenderCommandList *list) {
     if (s.drawBlocks[bank].memory)
       continue;
     ConstantAllocation zeros = Allocate(s, kBankBytes[bank], kCBVAlignment);
-    if (!zeros.memory)
+    if (!zeros.memory) {
+      BindFailed("allocation failed");
       return;
+    }
     std::memcpy(zeros.memory, kZeros, kBankBytes[bank]);
     s.drawBlocks[bank] = zeros;
   }
@@ -329,15 +369,19 @@ void BindDrawConstants(plume::RenderCommandList *list) {
     int target = -1;
     for (const auto &block : s.drawBlocks)
       target = std::max(target, ChunkOf(s, block));
-    if (target < 0)
+    if (target < 0) {
+      BindFailed("blocks not in this frame's chunks");
       return;
+    }
     bool moved = false;
     for (u32 bank = 0; bank < 3; ++bank) {
       if (ChunkOf(s, s.drawBlocks[bank]) == target)
         continue;
       ConstantAllocation copy = Allocate(s, kBankBytes[bank], kCBVAlignment);
-      if (!copy.memory)
+      if (!copy.memory) {
+        BindFailed("allocation failed");
         return;
+      }
       std::memcpy(copy.memory, s.drawBlocks[bank].memory, kBankBytes[bank]);
       s.drawBlocks[bank] = copy;
       moved = true;
@@ -347,26 +391,35 @@ void BindDrawConstants(plume::RenderCommandList *list) {
   }
   const int chunkIndex = ChunkOf(s, s.drawBlocks[0]);
   if (chunkIndex < 0 || ChunkOf(s, s.drawBlocks[1]) != chunkIndex ||
-      ChunkOf(s, s.drawBlocks[2]) != chunkIndex)
+      ChunkOf(s, s.drawBlocks[2]) != chunkIndex) {
+    BindFailed("blocks in different chunks");
     return;
+  }
 
   UploadChunk &chunk = s.frames[s.cursor].chunks[size_t(chunkIndex)];
   if (!chunk.constantSet) {
     auto *device = bd::gpu::Video::HostDevice();
-    if (!device)
-      return;
-    chunk.constantSet = s.constantSetBuilder.create(device);
-    if (!chunk.constantSet) {
-      BD_ERROR("constant_buffers: createDescriptorSet for set {} failed",
-               kConstantDescriptorSetIndex);
+    if (!device) {
+      BindFailed("no device");
       return;
     }
+    chunk.constantSet = s.constantSetBuilder.create(device);
+    if (!chunk.constantSet) {
+      BindFailed("createDescriptorSet failed");
+      return;
+    }
+    std::fprintf(stderr, "[ubo] set 5 for slot %u chunk %d created\n",
+                 s.cursor, chunkIndex);
     for (u32 bank = 0; bank < 3; ++bank)
       chunk.constantSet->setBuffer(bank, chunk.buffer.get(), kBankBytes[bank]);
   }
   const u32 offsets[3] = {u32(s.drawBlocks[0].ref.offset),
                           u32(s.drawBlocks[1].ref.offset),
                           u32(s.drawBlocks[2].ref.offset)};
+  static std::atomic<u32> binds{0};
+  if (binds.fetch_add(1, std::memory_order_relaxed) < 8)
+    std::fprintf(stderr, "[ubo] bind set 5: slot %u chunk %d offsets %u %u %u\n",
+                 s.cursor, chunkIndex, offsets[0], offsets[1], offsets[2]);
   list->setGraphicsDescriptorSetDynamic(chunk.constantSet.get(),
                                         kConstantDescriptorSetIndex, offsets,
                                         3);

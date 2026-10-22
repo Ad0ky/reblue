@@ -1,18 +1,118 @@
 diff --git a/XenosRecomp/dxc_compiler.cpp b/XenosRecomp/dxc_compiler.cpp
-index 4a851c2..5d20d08 100644
+index 4a851c2..b103461 100644
 --- a/XenosRecomp/dxc_compiler.cpp
 +++ b/XenosRecomp/dxc_compiler.cpp
+@@ -11,7 +11,7 @@ DxcCompiler::~DxcCompiler()
+     dxcCompiler->Release();
+ }
+ 
+-IDxcBlob* DxcCompiler::compile(const std::string& shaderSource, bool compilePixelShader, bool compileLibrary, bool compileSpirv)
++IDxcBlob* DxcCompiler::compile(const std::string& shaderSource, bool compilePixelShader, bool compileLibrary, bool compileSpirv, bool uboConstants)
+ {
+     DxcBuffer source{};
+     source.Ptr = shaderSource.c_str();
 @@ -42,6 +42,10 @@ IDxcBlob* DxcCompiler::compile(const std::string& shaderSource, bool compilePixe
      {
          args[argCount++] = L"-spirv";
          args[argCount++] = L"-fvk-use-dx-layout";
-+#ifdef REBLUE_SPIRV_UBO
-+        // The Switch: constants in uniform buffers (shader_common.h).
-+        args[argCount++] = L"-DREBLUE_UBO_CONSTANTS";
-+#endif
++        // The Switch's second variant: constants in uniform buffers
++        // (shader_common.h).
++        if (uboConstants)
++            args[argCount++] = L"-DREBLUE_UBO_CONSTANTS";
  
          if (!compilePixelShader)
              args[argCount++] = L"-fvk-invert-y";
+diff --git a/XenosRecomp/dxc_compiler.h b/XenosRecomp/dxc_compiler.h
+index d49bd32..3324b68 100644
+--- a/XenosRecomp/dxc_compiler.h
++++ b/XenosRecomp/dxc_compiler.h
+@@ -7,5 +7,5 @@ struct DxcCompiler
+     DxcCompiler();
+     ~DxcCompiler();
+ 
+-    IDxcBlob* compile(const std::string& shaderSource, bool compilePixelShader, bool compileLibrary, bool compileSpirv);
++    IDxcBlob* compile(const std::string& shaderSource, bool compilePixelShader, bool compileLibrary, bool compileSpirv, bool uboConstants = false);
+ };
+diff --git a/XenosRecomp/main.cpp b/XenosRecomp/main.cpp
+index 754198c..1f783dd 100644
+--- a/XenosRecomp/main.cpp
++++ b/XenosRecomp/main.cpp
+@@ -29,6 +29,10 @@ struct RecompiledShader
+     uint8_t* data = nullptr;
+     IDxcBlob* dxil = nullptr;
+     std::vector<uint8_t> spirv;
++#ifdef REBLUE_SPIRV_UBO
++    // The same shader with its constants in uniform buffers (REBLUE_UBO_CONSTANTS).
++    std::vector<uint8_t> spirvUbo;
++#endif
+     uint32_t specConstantsMask = 0;
+     std::string sourceName;
+ };
+@@ -209,6 +213,22 @@ int main(int argc, char** argv)
+ 
+                 spirv->Release();
+ 
++#ifdef REBLUE_SPIRV_UBO
++                IDxcBlob* spirvUbo = dxcCompiler.compile(recompiler.out, recompiler.isPixelShader, false, true, true);
++                if (spirvUbo == nullptr)
++                {
++                    recordFailure("dxc-spirv-ubo-compile-failed");
++                    return;
++                }
++                if (!smolv::Encode(spirvUbo->GetBufferPointer(), spirvUbo->GetBufferSize(), shader.spirvUbo, smolv::kEncodeFlagStripDebugInfo))
++                {
++                    spirvUbo->Release();
++                    recordFailure("smolv-encode-ubo-failed");
++                    return;
++                }
++                spirvUbo->Release();
++#endif
++
+                 size_t currentProgress = ++progress;
+                 if ((currentProgress % 10) == 0 || (currentProgress == shaders.size() - 1))
+                     fmt::println("Recompiling shaders... {}%", currentProgress / float(shaders.size()) * 100.0f);
+@@ -234,6 +254,10 @@ int main(int argc, char** argv)
+ 
+         std::vector<uint8_t> dxil;
+         std::vector<uint8_t> spirv;
++#ifdef REBLUE_SPIRV_UBO
++        std::vector<uint8_t> spirvUbo;
++        std::string uboTable = "const uint32_t g_shaderCacheUboSpirv[] = {";
++#endif
+ 
+         for (auto& [hash, shader] : shaders)
+         {
+@@ -247,6 +271,10 @@ int main(int argc, char** argv)
+             }
+             
+             spirv.insert(spirv.end(), shader.spirv.begin(), shader.spirv.end());
++#ifdef REBLUE_SPIRV_UBO
++            uboTable += fmt::format("{},{},", spirvUbo.size(), shader.spirvUbo.size());
++            spirvUbo.insert(spirvUbo.end(), shader.spirvUbo.begin(), shader.spirvUbo.end());
++#endif
+         }
+ 
+         f.println("}};");
+@@ -285,6 +313,19 @@ int main(int argc, char** argv)
+         f.println("const size_t g_spirvCacheDecompressedSize = {};", spirv.size());
+         f.println("const size_t g_shaderCacheEntryCount = {};", shaders.size());
+ 
++#ifdef REBLUE_SPIRV_UBO
++        // Offset and size of each entry's uniform-buffer SPIR-V, in entry order.
++        f.println("{}}};", uboTable);
++        std::vector<uint8_t> uboCompressed(ZSTD_compressBound(spirvUbo.size()));
++        uboCompressed.resize(ZSTD_compress(uboCompressed.data(), uboCompressed.size(), spirvUbo.data(), spirvUbo.size(), level));
++        f.print("const uint8_t g_compressedSpirvUboCache[] = {{");
++        for (auto data : uboCompressed)
++            f.print("{},", data);
++        f.println("}};");
++        f.println("const size_t g_spirvUboCacheCompressedSize = {};", uboCompressed.size());
++        f.println("const size_t g_spirvUboCacheDecompressedSize = {};", spirvUbo.size());
++#endif
++
+         writeAllBytes(output, f.out.data(), f.out.size());
+     }
+     else
 diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
 index 63c37c9..46de8ef 100644
 --- a/XenosRecomp/shader_common.h

@@ -23,6 +23,7 @@
 #include "gpu/backend.h"
 #include "gpu/host_resource_heap.h"
 #include "gpu/pipeline/pso_recorder.h"
+#include "gpu/constant_buffers.h"
 #include "gpu/shaders/shader_cache.h"
 
 #if defined(REBLUE_D3D12)
@@ -118,6 +119,28 @@ const LinkedShaderCacheEntry *FindLinkedShaderCacheEntry(u64 hash, u32 masked) {
 // modules smol-v encoded. Decompressed once on first shader resolve.
 std::once_flag g_spirv_cache_once;
 std::unique_ptr<u8[]> g_spirv_cache;
+
+#if defined(__SWITCH__)
+// The uniform-buffer variant (shader_cache.h), with bd_switch_ubo_constants.
+std::once_flag g_spirv_ubo_cache_once;
+std::unique_ptr<u8[]> g_spirv_ubo_cache;
+
+const u8 *SpirvUboCache() {
+  std::call_once(g_spirv_ubo_cache_once, [] {
+    g_spirv_ubo_cache = std::make_unique<u8[]>(g_spirvUboCacheDecompressedSize);
+    const size_t n = ZSTD_decompress(
+        g_spirv_ubo_cache.get(), g_spirvUboCacheDecompressedSize,
+        g_compressedSpirvUboCache, g_spirvUboCacheCompressedSize);
+    if (ZSTD_isError(n) || n != g_spirvUboCacheDecompressedSize) {
+      BD_ERROR("SPIR-V (uniform buffer) shader cache decompression failed ({} "
+               "of {} bytes)",
+               n, g_spirvUboCacheDecompressedSize);
+      g_spirv_ubo_cache.reset();
+    }
+  });
+  return g_spirv_ubo_cache.get();
+}
+#endif
 
 const u8 *SpirvCache() {
   std::call_once(g_spirv_cache_once, [] {
@@ -216,12 +239,22 @@ plume::RenderShader *GetOrLinkShader(GuestShader *gs, u32 specConstants) {
   // supplied per pipeline by the pipeline cache, and no link step exists.
   (void)specConstants;
   const u8 *cache = SpirvCache();
+  u32 spirvOffset = entry->spirvOffset;
+  u32 spirvSize = entry->spirvSize;
+#if defined(__SWITCH__)
+  if (UboConstantsEnabled()) {
+    const size_t index = size_t(entry - g_shaderCacheEntries);
+    cache = SpirvUboCache();
+    spirvOffset = g_shaderCacheUboSpirv[index * 2];
+    spirvSize = g_shaderCacheUboSpirv[index * 2 + 1];
+  }
+#endif
   if (!cache)
     return nullptr;
-  const u8 *smol = cache + entry->spirvOffset;
-  std::vector<u8> spirv(smolv::GetDecodedBufferSize(smol, entry->spirvSize));
+  const u8 *smol = cache + spirvOffset;
+  std::vector<u8> spirv(smolv::GetDecodedBufferSize(smol, spirvSize));
   if (spirv.empty() ||
-      !smolv::Decode(smol, entry->spirvSize, spirv.data(), spirv.size())) {
+      !smolv::Decode(smol, spirvSize, spirv.data(), spirv.size())) {
     BD_ERROR("GetOrLinkShader: SPIR-V decode failed (hash=0x{:016X})",
              entry->hash);
     return nullptr;

@@ -40,3 +40,13 @@ extern const size_t g_dxilCacheDecompressedSize;
 extern const uint8_t g_compressedSpirvCache[];
 extern const size_t g_spirvCacheCompressedSize;
 extern const size_t g_spirvCacheDecompressedSize;
+
+#if defined(__SWITCH__)
+// The Switch build's XenosRecomp (REBLUE_SPIRV_UBO) also emits every shader
+// with its constants in uniform buffers: {offset, size} per entry, in entry
+// order, into a cache of its own (bd_switch_ubo_constants picks one).
+extern const uint32_t g_shaderCacheUboSpirv[];
+extern const uint8_t g_compressedSpirvUboCache[];
+extern const size_t g_spirvUboCacheCompressedSize;
+extern const size_t g_spirvUboCacheDecompressedSize;
+#endif

@@ -227,8 +227,9 @@ bool BuildPipelineLayout(VideoState &s) {
   layout_builder.addDescriptorSet(occlusion_set_builder);
 #if REBLUE_UBO_CONSTANTS
   // Set 5: the guest shaders' constant blocks as dynamic uniform buffers
-  // (constant_buffers.h).
-  AddConstantDescriptorSet(layout_builder);
+  // (constant_buffers.h), with bd_switch_ubo_constants.
+  if (UboConstantsEnabled())
+    AddConstantDescriptorSet(layout_builder);
 #endif
 #endif
 

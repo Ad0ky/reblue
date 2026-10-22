@@ -100,6 +100,11 @@ void InvalidateSharedBinding();
 inline constexpr u32 kConstantDescriptorSetIndex = 5;
 enum ConstantBank : u32 { kVertexBank = 0, kPixelBank = 1, kSharedBank = 2 };
 
+// bd_switch_ubo_constants, read once: the uniform-buffer form is in use. Off,
+// the guest shaders are the device-address variant and push constants carry
+// the three addresses as on the PC.
+bool UboConstantsEnabled();
+
 // Adds set 5 to the main pipeline layout (BuildPipelineLayout, after set 4).
 void AddConstantDescriptorSet(plume::RenderPipelineLayoutBuilder &layout);
 // A block just uploaded for the next draw.

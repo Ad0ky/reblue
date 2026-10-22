@@ -155,6 +155,11 @@ What the build does already:
   does. `tools/switch/patches/xenosrecomp-switch.patch` (the host stage builds
   XenosRecomp with `REBLUE_SPIRV_UBO`), `plume-switch.patch`
   (`setGraphicsDescriptorSetDynamic`), and `src/gpu/constant_buffers.cpp`.
+  **Off by default** (`bd_switch_ubo_constants = false`): the first console run
+  lost the GPU at start. The NRO carries both SPIR-V caches; with the setting
+  on, `rex_stderr.log` gets `[ubo]` lines (the descriptor sets made, the first
+  binds and their offsets, every bind that fails). Delete
+  `cache/vulkan_pipelines.bin` when switching it.
 - **Pipeline cache.** `cache/vulkan_pipelines.bin` beside the NRO keeps every
   Vulkan pipeline built so far (each one costs ~60 ms to build on NVK). The
   first run builds them, later runs read them. Delete the file to start over.
