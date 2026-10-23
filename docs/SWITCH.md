@@ -171,6 +171,11 @@ What the build does already:
   struct map answer hits from a lock-free direct-mapped cache
   (`gpu/lookup_cache.h`, a seqlock per slot) that every change to the map
   updates for its own key, instead of a mutex and a hash probe per draw.
+- **Shadow gathers.** The sun-shadow receivers (`bd_normal_ps` and the other
+  lit shaders) do six bilinear shadow compares per pixel; each read its 2x2
+  footprint with four loads. `shadowCmp2D` (`xenosrecomp-switch.patch`,
+  `shader_common.h`) reads it with one gather at the footprint's center, and
+  falls back to the clamped loads only where the footprint leaves the map.
 - **Constant dirty marks.** `D3DDevice_Set*ShaderConstantF` marks the block
   dirty without the renderer lock once it is already dirty.
 - **Pipeline cache.** `cache/vulkan_pipelines.bin` beside the NRO keeps every

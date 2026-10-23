@@ -129,7 +129,7 @@ index 754198c..e00ff2e 100644
      }
      else
 diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
-index 63c37c9..46de8ef 100644
+index 63c37c9..af021b3 100644
 --- a/XenosRecomp/shader_common.h
 +++ b/XenosRecomp/shader_common.h
 @@ -31,7 +31,18 @@
@@ -174,10 +174,67 @@ index 63c37c9..46de8ef 100644
  
  #endif
  
+@@ -126,20 +144,39 @@ float2 getWeights2D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, f
+ 
+ #ifdef REBLUE_RECOMP
+ // Bilinear-filtered shadow compare over the four neighboring depth texels.
+-float shadowCmp2D(uint resourceDescriptorIndex, float2 texCoord, float ref)
++//
++// The 2x2 footprint comes from one gather instead of four loads (the field's
++// lit shaders do six of these per pixel). It samples at the footprint's
++// center, half a texel from every edge, so the hardware picks the texels the
++// shader's weights are for whatever its coordinate rounding. A footprint that
++// leaves the map loads its clamped texels instead, as before: the gather would
++// use the sampler's address mode there.
++float shadowCmp2D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float ref)
+ {
+     Texture2D<float4> texture = g_Texture2DDescriptorHeap[resourceDescriptorIndex];
+     int2 dimensions = int2(getTexture2DDimensions(texture));
+     float2 coord = texCoord * dimensions - 0.5;
+     float2 weights = frac(coord);
+     int2 base = int2(floor(coord));
+-    int2 c0 = clamp(base, int2(0, 0), dimensions - 1);
+-    int2 c1 = clamp(base + 1, int2(0, 0), dimensions - 1);
+-    float4 taps = float4(
+-        texture.Load(int3(c0, 0)).x,
+-        texture.Load(int3(c1.x, c0.y, 0)).x,
+-        texture.Load(int3(c0.x, c1.y, 0)).x,
+-        texture.Load(int3(c1, 0)).x) > ref;
++    float4 depth;
++    [branch] if (all(base >= 0) && all(base + 1 < dimensions))
++    {
++        // Gather order: x = (0,1), y = (1,1), z = (1,0), w = (0,0).
++        float4 g = texture.GatherRed(g_SamplerDescriptorHeap[samplerDescriptorIndex],
++            (float2(base) + 1.0) / float2(dimensions));
++        depth = float4(g.w, g.z, g.x, g.y);
++    }
++    else
++    {
++        int2 c0 = clamp(base, int2(0, 0), dimensions - 1);
++        int2 c1 = clamp(base + 1, int2(0, 0), dimensions - 1);
++        depth = float4(
++            texture.Load(int3(c0, 0)).x,
++            texture.Load(int3(c1.x, c0.y, 0)).x,
++            texture.Load(int3(c0.x, c1.y, 0)).x,
++            texture.Load(int3(c1, 0)).x);
++    }
++    float4 taps = depth > ref;
+     return lerp(lerp(taps.x, taps.y, weights.x), lerp(taps.z, taps.w, weights.x), weights.y);
+ }
+ #endif
 diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
-index feaa90b..5dd4add 100644
+index feaa90b..1959a13 100644
 --- a/XenosRecomp/shader_recompiler.cpp
 +++ b/XenosRecomp/shader_recompiler.cpp
+@@ -795,7 +795,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+                 const uint32_t compA = ((instr.src1Swizzle >> (i * 2)) + i) & 0x3;
+                 const uint32_t compB = ((instr.src2Swizzle >> (i * 2)) + i) & 0x3;
+                 indent();
+-                println("r{}.{} = shadowCmp2D(ShadowTexture_Texture2DDescriptorIndex, shadowTapUV[{}], r{}.{});",
++                println("r{}.{} = shadowCmp2D(ShadowTexture_Texture2DDescriptorIndex, ShadowTexture_SamplerDescriptorIndex, shadowTapUV[{}], r{}.{});",
+                     instr.vectorDest, SWIZZLES[i], shadowTapSlots[srcA * 4 + compA], srcB, SWIZZLES[compB]);
+             }
+             shadowCmpRewritten = true;
 @@ -1288,7 +1288,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
      const auto constantTableContainer = reinterpret_cast<const ConstantTableContainer*>(shaderData + shaderContainer->constantTableOffset);
      constantTableData = reinterpret_cast<const uint8_t*>(&constantTableContainer->constantTable);
