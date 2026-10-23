@@ -168,8 +168,11 @@ What the build does already:
   re-uploaded only when the next shader reads further. Most pixel shaders read
   under 1 KiB; vertex shaders with indexed arrays read all of it.
 - **Lookup caches.** The guest resource registry and the vertex/index buffer
-  struct map answer from a per-thread cache (`gpu/lookup_cache.h`), dropped
-  on any change to the map, instead of a mutex and a hash probe per draw.
+  struct map answer hits from a lock-free direct-mapped cache
+  (`gpu/lookup_cache.h`, a seqlock per slot) that every change to the map
+  updates for its own key, instead of a mutex and a hash probe per draw.
+- **Constant dirty marks.** `D3DDevice_Set*ShaderConstantF` marks the block
+  dirty without the renderer lock once it is already dirty.
 - **Pipeline cache.** `cache/vulkan_pipelines.bin` beside the NRO keeps every
   Vulkan pipeline built so far (each one costs ~60 ms to build on NVK). The
   first run builds them, later runs read them. Delete the file to start over.

@@ -52,9 +52,9 @@ std::unordered_map<u32, PhysicalBufferRecord> g_physicalBuffers;
 // SetStreamSource get the struct VA, never a HostResourceHeap::Alloc'd one, so
 // FromGuest misses. Struct address reuse for a different base_va is unhandled.
 std::unordered_map<u32, bd::gpu::GuestBuffer *> g_physicalBufferStructs;
-// Bumped with g_physicalBuffersMutex held on every change to
-// g_physicalBufferStructs (FindPhysicalBufferByStruct's per-thread cache).
-bd::gpu::LookupGeneration g_physicalBufferStructsGen;
+// Mirrors g_physicalBufferStructs for FindPhysicalBufferByStruct; updated with
+// g_physicalBuffersMutex held on every change (lookup_cache.h).
+bd::gpu::LookupCache<bd::gpu::GuestBuffer *> g_physicalBufferStructsCache;
 
 // Parked rather than freed inline: a prior frame's command list may still
 // reference them. DrainBufferGraveyard frees them post-fence.
@@ -201,7 +201,7 @@ void RememberBufferStruct(u32 struct_va, bd::gpu::GuestBuffer *buf) {
     return;
   std::lock_guard lock(g_physicalBuffersMutex);
   g_physicalBufferStructs[struct_va] = buf;
-  g_physicalBufferStructsGen.Bump();
+  g_physicalBufferStructsCache.Set(struct_va, true, buf);
 }
 
 // --- Block helpers. All require the caller to hold g_physicalBuffersMutex. ---
@@ -318,7 +318,7 @@ bd::gpu::GuestBuffer *TryRegisterBlockMesh(u32 struct_va, u32 base_va, u32 size,
     return nullptr;
   if (struct_va) {
     g_physicalBufferStructs[struct_va] = view;
-    g_physicalBufferStructsGen.Bump();
+    g_physicalBufferStructsCache.Set(struct_va, true, view);
   }
   return view;
 }
@@ -369,8 +369,8 @@ void EvictPhysicalBuffersInBlock(u32 block_base, u32 block_size) {
       for (auto sit = g_physicalBufferStructs.begin();
            sit != g_physicalBufferStructs.end();) {
         if (sit->second == gb) {
+          g_physicalBufferStructsCache.Erase(sit->first);
           sit = g_physicalBufferStructs.erase(sit);
-          g_physicalBufferStructsGen.Bump();
         } else {
           ++sit;
         }
@@ -395,8 +395,8 @@ void EvictPhysicalBuffersInBlock(u32 block_base, u32 block_size) {
         for (auto sit = g_physicalBufferStructs.begin();
              sit != g_physicalBufferStructs.end();) {
           if (sit->second && sit->second->blockBuffer == block_buf) {
+            g_physicalBufferStructsCache.Erase(sit->first);
             sit = g_physicalBufferStructs.erase(sit);
-            g_physicalBufferStructsGen.Bump();
           } else {
             ++sit;
           }
@@ -437,14 +437,14 @@ namespace bd::gpu {
 bd::gpu::GuestBuffer *FindPhysicalBufferByStruct(u32 struct_va) {
   if (!struct_va)
     return nullptr;
-  thread_local bd::gpu::LookupCache<bd::gpu::GuestBuffer *> cache;
   bd::gpu::GuestBuffer *buf = nullptr;
-  if (cache.Find(struct_va, g_physicalBufferStructsGen.Load(), &buf))
-    return buf;
+  bool present = false;
+  if (g_physicalBufferStructsCache.Find(struct_va, &present, &buf))
+    return present ? buf : nullptr;
   std::lock_guard lock(g_physicalBuffersMutex);
   auto it = g_physicalBufferStructs.find(struct_va);
   buf = (it != g_physicalBufferStructs.end()) ? it->second : nullptr;
-  cache.Put(struct_va, g_physicalBufferStructsGen.Load(), buf);
+  g_physicalBufferStructsCache.Set(struct_va, buf != nullptr, buf);
   return buf;
 }
 

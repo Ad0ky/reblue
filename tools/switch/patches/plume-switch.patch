@@ -72,7 +72,7 @@ index be1c5c3..3de1c1b 100644
  
      enum class RenderRootDescriptorType {
 diff --git a/plume_vulkan.cpp b/plume_vulkan.cpp
-index 11abda8..c7800a0 100644
+index 11abda8..4959452 100644
 --- a/plume_vulkan.cpp
 +++ b/plume_vulkan.cpp
 @@ -5,7 +5,18 @@
@@ -300,7 +300,24 @@ index 11abda8..c7800a0 100644
          assert(desc.renderWindow != 0);
          VkWin32SurfaceCreateInfoKHR surfaceCreateInfo = {};
          surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-@@ -2479,7 +2627,18 @@ namespace plume {
+@@ -2392,6 +2540,16 @@ namespace plume {
+         }
+ 
+         desc.textureCount = retrievedImageCount;
++#if defined(__SWITCH__)
++        // How the frame pacing can work: with two images and FIFO the GPU
++        // waits for scanout and frames round up to whole vblanks.
++        fprintf(stderr, "[plume] swapchain %ux%u: %u images (asked %u), present mode %s (immediate %s, mailbox %s)\n",
++            width, height, retrievedImageCount, createInfo.minImageCount,
++            requiredPresentMode == VK_PRESENT_MODE_FIFO_KHR ? "FIFO" :
++            requiredPresentMode == VK_PRESENT_MODE_MAILBOX_KHR ? "MAILBOX" :
++            requiredPresentMode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "IMMEDIATE" : "other",
++            immediatePresentModeSupported ? "yes" : "no", mailboxPresentModeSupported ? "yes" : "no");
++#endif
+ 
+         std::vector<VkImage> images(desc.textureCount);
+         res = vkGetSwapchainImagesKHR(commandQueue->device->vk, vk, &desc.textureCount, images.data());
+@@ -2479,7 +2637,18 @@ namespace plume {
      }
  
      void VulkanSwapChain::getWindowSize(uint32_t &dstWidth, uint32_t &dstHeight) const {
@@ -320,7 +337,7 @@ index 11abda8..c7800a0 100644
          RECT rect;
          GetClientRect(desc.renderWindow, &rect);
          dstWidth = rect.right - rect.left;
-@@ -3022,6 +3181,15 @@ namespace plume {
+@@ -3022,6 +3191,15 @@ namespace plume {
          setDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, activeGraphicsPipelineLayout, descriptorSet, setIndex);
      }
  
@@ -336,7 +353,7 @@ index 11abda8..c7800a0 100644
      void VulkanCommandList::setGraphicsRootDescriptor(RenderBufferReference bufferReference, uint32_t rootDescriptorIndex) {
          assert(false && "Root descriptors are not supported in Vulkan.");
      }
-@@ -3849,6 +4017,14 @@ namespace plume {
+@@ -3849,6 +4027,14 @@ namespace plume {
  
          // Store properties.
          vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
@@ -351,7 +368,7 @@ index 11abda8..c7800a0 100644
  
          // Check for supported features.
          void *featuresChain = nullptr;
-@@ -4118,6 +4294,33 @@ namespace plume {
+@@ -4118,6 +4304,33 @@ namespace plume {
              return;
          }
  
@@ -385,7 +402,7 @@ index 11abda8..c7800a0 100644
          // Find the biggest device local memory available on the device.
          VkDeviceSize memoryHeapSize = 0;
          const VkPhysicalDeviceMemoryProperties *memoryProps = nullptr;
-@@ -4453,6 +4656,25 @@ namespace plume {
+@@ -4453,6 +4666,25 @@ namespace plume {
      void VulkanDevice::release() {
          nullBuffer = nullptr; // force destruction before destroying allocator
  
@@ -411,7 +428,7 @@ index 11abda8..c7800a0 100644
          if (allocator != VK_NULL_HANDLE) {
              vmaDestroyAllocator(allocator);
              allocator = VK_NULL_HANDLE;
-@@ -4481,7 +4703,23 @@ namespace plume {
+@@ -4481,7 +4713,23 @@ namespace plume {
      // VulkanInterface
  
      VulkanInterface::VulkanInterface() {

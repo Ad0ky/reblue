@@ -38,24 +38,25 @@ using RegistryReadLock = std::shared_lock<std::shared_mutex>;
 #endif
 RegistryMutex g_registry_mutex;
 std::unordered_map<u32, ResourceType> g_registry;
-LookupGeneration g_registry_gen;
+LookupCache<ResourceType> g_registry_cache;
 
 struct RegistryAnswer {
   bool found = false;
   ResourceType type{};
 };
 
-// The map lookup through the per-thread cache (lookup_cache.h).
+// The map lookup through the lock-free cache (lookup_cache.h).
 RegistryAnswer Lookup(u32 guest_va) {
-  thread_local LookupCache<RegistryAnswer> cache;
   RegistryAnswer answer;
-  if (cache.Find(guest_va, g_registry_gen.Load(), &answer))
+  if (g_registry_cache.Find(guest_va, &answer.found, &answer.type))
     return answer;
-  RegistryReadLock lock(g_registry_mutex);
+  // Exclusive even where the map has a reader/writer lock: filling the slot
+  // is a write to the cache.
+  std::unique_lock lock(g_registry_mutex);
   auto it = g_registry.find(guest_va);
   if (it != g_registry.end())
     answer = {true, it->second};
-  cache.Put(guest_va, g_registry_gen.Load(), answer);
+  g_registry_cache.Set(guest_va, answer.found, answer.type);
   return answer;
 }
 
@@ -64,13 +65,13 @@ RegistryAnswer Lookup(u32 guest_va) {
 void HostResourceHeap::Register(u32 guest_va, ResourceType type) {
   std::unique_lock lock(g_registry_mutex);
   g_registry[guest_va] = type;
-  g_registry_gen.Bump();
+  g_registry_cache.Set(guest_va, true, type);
 }
 
 void HostResourceHeap::Unregister(u32 guest_va) {
   std::unique_lock lock(g_registry_mutex);
   g_registry.erase(guest_va);
-  g_registry_gen.Bump();
+  g_registry_cache.Erase(guest_va);
 }
 
 bool HostResourceHeap::IsRegistered(u32 guest_va) {

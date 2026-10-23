@@ -136,12 +136,24 @@ void Video::SetVertexStream(u32 slot, plume::RenderBufferReference buffer,
 
 void Video::MarkVSConstantsDirty() {
   auto &s = state();
+  // The game sets constants a few registers at a time, many calls per draw,
+  // and the flag is cleared only by FlushRenderStateLocked: once it is set,
+  // the lock (~a lock pair per call on the draw thread) changes nothing.
+  if (std::atomic_ref<bool>(s.dirtyStates.vertexShaderConstants)
+          .load(std::memory_order_relaxed))
+    return;
   std::lock_guard lock(s.mutex);
   s.dirtyStates.vertexShaderConstants = true;
 }
 
 void Video::MarkPSConstantsDirty() {
   auto &s = state();
+  // The game sets constants a few registers at a time, many calls per draw,
+  // and the flag is cleared only by FlushRenderStateLocked: once it is set,
+  // the lock (~a lock pair per call on the draw thread) changes nothing.
+  if (std::atomic_ref<bool>(s.dirtyStates.pixelShaderConstants)
+          .load(std::memory_order_relaxed))
+    return;
   std::lock_guard lock(s.mutex);
   s.dirtyStates.pixelShaderConstants = true;
 }
