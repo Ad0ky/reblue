@@ -44,8 +44,15 @@ Still to do:
    uniform-buffer build without `vk::RawBufferLoad`, then the same chain, compiled at build time into the NRO.
 3. uam as a library in the NRO, with WWHD's seven patches (sa2-nx `app/thirdparty/uam`, `PATCHES.md`; patch 7 turns
    off dual issue, which made warp-sized blocks flicker). A compile thread at priority 0x3B, a DKSH cache on the card.
-4. **GPU time**: a test NRO that times `bd_normal_ps` and the other heavy pixel shaders on full-screen passes with
-   `dkCmdBufReportCounter`, against the same passes on NVK. Go/no-go for the GPU side.
+4. **GPU time** (`tools/switch/gputest`): `reblue_gputest.nro` draws the 12 pixel shaders that cost the most in the
+   field and battles (`bd_normal_ps`, `bd_toon_ps`, the post effects...) full screen at 960x536 into RGBA16F, 20 draws
+   between two timestamps, the fastest of three runs, first on deko3d (uam's DKSH) and then on NVK (the Switch
+   build's SPIR-V), with the same constants (every boolean on), textures and GPU profile (460.8 MHz). It writes
+   `logs/gputest.log` with ms per draw on each and the ratio. Build it with `run-switch-build.bat -GpuTest` (it
+   needs devkitPro's `deko3d` in the Switch image; the build installs it when it can). Its shaders come from
+   `gputest.bin` beside it, made from the game's shaders by `make_pack.py` (XenosRecomp's HLSL dump, DXC,
+   SPIRV-Cross, `spv_to_dk_glsl.py`, uam), so the pack stays on the SD card, out of the repository.
+   Go/no-go for the GPU side: the field is GPU-bound, and nfsmw-nx's first deko3d runs needed twice NVK's GPU time.
 5. The shader cache: the DKSH are made from the player's game, so they stay out of the repository like `generated/`.
 
 ## P1: device and presentation

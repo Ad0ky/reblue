@@ -49,6 +49,14 @@ command -v ninja >/dev/null || die "ninja missing"
 [ -f out/switch-host/shader_cache.cpp ] || die "out/switch-host/shader_cache.cpp missing: run the host stage first"
 [ -f thirdparty/rexglue-sdk/thirdparty/.fetched-bd833a2ab69d ] || die "SDK third-party sources missing: run the host stage first"
 
+# GPUTEST=1: also the GPU test NRO (tools/switch/gputest), which needs devkitPro's deko3d.
+GPUTEST="${GPUTEST:-0}"
+if [ "$GPUTEST" = 1 ] && [ ! -f "$DEVKITPRO/libnx/lib/libdeko3d.a" ]; then
+    log "Installing devkitPro's deko3d (for the GPU test)"
+    (dkp-pacman -Sy --noconfirm deko3d || pacman -Sy --noconfirm deko3d) >/dev/null 2>&1 || true
+    [ -f "$DEVKITPRO/libnx/lib/libdeko3d.a" ] || die "deko3d is not in this image and could not be installed (dkp-pacman -S deko3d)"
+fi
+
 # ---------------------------------------------------------------- build
 if [ "${CLEAN:-0}" = 1 ]; then rm -rf "$build"; fi
 log "Configure ($BUILD_TYPE)"
@@ -58,16 +66,23 @@ cmake -S . -B "$build" -G Ninja \
     -DCMAKE_CXX_SCAN_FOR_MODULES=OFF \
     -DDEVKITPRO="$DEVKITPRO" \
     -DREXGLUE_SWITCH_NVK_SDK="$NVK_SDK" \
-    -DREBLUE_SWITCH_LTO="$([ "$LTO" = 1 ] && echo ON || echo OFF)"
+    -DREBLUE_SWITCH_LTO="$([ "$LTO" = 1 ] && echo ON || echo OFF)" \
+    -DREBLUE_SWITCH_GPUTEST="$([ "$GPUTEST" = 1 ] && echo ON || echo OFF)"
 
 log "Build ($JOBS jobs)"
 # -k 0: keep going after a failure so one run reports every failing file.
-cmake --build "$build" --target reblue -j "$JOBS" -- -k 0
+targets="reblue"
+[ "$GPUTEST" = 1 ] && targets="reblue reblue_gputest"
+cmake --build "$build" --target $targets -j "$JOBS" -- -k 0
 
 out="$root/out/switch"
 mkdir -p "$out"
 cp "$build/reblue.nro" "$out/"
 cp "$build/reblue.elf" "$out/" 2>/dev/null || cp "$build/reblue" "$out/reblue.elf"
+if [ "$GPUTEST" = 1 ]; then
+    cp "$build/tools/switch/gputest/reblue_gputest.nro" "$out/"
+    echo "GPU test: out/switch/reblue_gputest.nro (with gputest.bin in sdmc:/switch/reblue/)"
+fi
 log "Done"
 echo "NRO: out/switch/reblue.nro  (copy to sdmc:/switch/reblue/)"
 echo "ELF: out/switch/reblue.elf  (keep it: crash addresses resolve against it)"

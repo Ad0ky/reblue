@@ -35,6 +35,7 @@ if not "%BUILDRC%"=="0" (echo Build FAILED, see switch-build.log & goto end)
 if not exist ..\SD-card\switch\reblue mkdir ..\SD-card\switch\reblue
 copy /y out\switch\reblue.nro ..\SD-card\switch\reblue\reblue.nro >> switch-build.log
 copy /y out\switch\reblue.elf ..\SD-card\switch\reblue\reblue.elf >> switch-build.log
+if exist out\switch\reblue_gputest.nro copy /y out\switch\reblue_gputest.nro ..\SD-card\switch\reblue\reblue_gputest.nro >> switch-build.log
 echo Build OK: ..\SD-card\switch\reblue\reblue.nro
 :end
 echo Done. See switch-build.log

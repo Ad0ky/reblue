@@ -20,7 +20,9 @@ param(
     # Link-time optimisation of the game code: faster game, slow link, ~16 GB of RAM for Docker.
     [switch]$Lto,
     # Plain calls between recompiled functions (undoes tools/switch/direct_calls.py).
-    [switch]$NoDirectCalls
+    [switch]$NoDirectCalls,
+    # Also the GPU test NRO (tools/switch/gputest, docs/SWITCH-deko3d.md P0.4).
+    [switch]$GpuTest
 )
 # Continue, not Stop: Windows PowerShell 5.1 turns a native program's redirected
 # stderr line into a terminating error. Every docker call checks its exit code.
@@ -77,6 +79,7 @@ if ($Jobs -gt 0) { $envArgs += @("-e", "JOBS=$Jobs") }
 if ($Clean) { $envArgs += @("-e", "CLEAN=1") }
 if ($Lto) { $envArgs += @("-e", "LTO=1") }
 if ($NoDirectCalls) { $envArgs += @("-e", "DIRECT_CALLS=0") }
+if ($GpuTest) { $envArgs += @("-e", "GPUTEST=1") }
 
 # ---------------------------------------------------------------- stages
 Write-Host ""

@@ -1,0 +1,50 @@
+#version 460
+// gputest: the same full-screen triangle for uam (deko3d).
+layout(location = 0) out vec4 v0;
+layout(location = 1) out vec4 v1;
+layout(location = 2) out vec4 v2;
+layout(location = 3) out vec4 v3;
+layout(location = 4) out vec4 v4;
+layout(location = 5) out vec4 v5;
+layout(location = 6) out vec4 v6;
+layout(location = 7) out vec4 v7;
+layout(location = 8) out vec4 v8;
+layout(location = 9) out vec4 v9;
+layout(location = 10) out vec4 v10;
+layout(location = 11) out vec4 v11;
+layout(location = 12) out vec4 v12;
+layout(location = 13) out vec4 v13;
+layout(location = 14) out vec4 v14;
+layout(location = 15) out vec4 v15;
+layout(location = 16) out vec4 v16;
+layout(location = 17) out vec4 v17;
+layout(location = 18) out vec4 v18;
+layout(location = 19) out vec4 v19;
+layout(location = 20) out vec4 v20;
+layout(location = 21) out vec4 v21;
+void main() {
+    vec2 uv = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(uv * 2.0 - 1.0, 0.5, 1.0);
+    v0 = vec4(uv * 1.0, 0.05, 1.0);
+    v1 = vec4(uv * 1.25, 0.15000000000000002, 1.0);
+    v2 = vec4(uv * 1.5, 0.25, 1.0);
+    v3 = vec4(uv * 1.75, 0.35000000000000003, 1.0);
+    v4 = vec4(uv * 1.0, 0.45, 1.0);
+    v5 = vec4(uv * 1.25, 0.55, 1.0);
+    v6 = vec4(uv * 1.5, 0.6500000000000001, 1.0);
+    v7 = vec4(uv * 1.75, 0.7500000000000001, 1.0);
+    v8 = vec4(uv * 1.0, 0.05, 1.0);
+    v9 = vec4(uv * 1.25, 0.15000000000000002, 1.0);
+    v10 = vec4(uv * 1.5, 0.25, 1.0);
+    v11 = vec4(uv * 1.75, 0.35000000000000003, 1.0);
+    v12 = vec4(uv * 1.0, 0.45, 1.0);
+    v13 = vec4(uv * 1.25, 0.55, 1.0);
+    v14 = vec4(uv * 1.5, 0.6500000000000001, 1.0);
+    v15 = vec4(uv * 1.75, 0.7500000000000001, 1.0);
+    v16 = vec4(uv * 1.0, 0.05, 1.0);
+    v17 = vec4(uv * 1.25, 0.15000000000000002, 1.0);
+    v18 = vec4(uv * 1.5, 0.25, 1.0);
+    v19 = vec4(uv * 1.75, 0.35000000000000003, 1.0);
+    v20 = vec4(uv * 1.0, 0.45, 1.0);
+    v21 = vec4(uv * 1.25, 0.55, 1.0);
+}

@@ -349,6 +349,11 @@ file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/packaging/program_files.txt"
 
 # Nintendo Switch: reblue.nro next to the ELF (cmake/switch.cmake). On the SD
 # card it goes in sdmc:/switch/reblue/ with the game/ folder beside it.
+option(REBLUE_SWITCH_GPUTEST "Switch: also build the GPU test NRO (tools/switch/gputest)" OFF)
+if(REBLUE_SWITCH AND REBLUE_SWITCH_GPUTEST AND NOT REBLUE_SWITCH_CHECK_ONLY)
+    add_subdirectory(tools/switch/gputest)
+endif()
+
 if(REBLUE_SWITCH AND NOT REBLUE_SWITCH_CHECK_ONLY)
     set(reblue_nro_icon "")
     if(EXISTS "${REBLUE_SWITCH_APP_ICON}")

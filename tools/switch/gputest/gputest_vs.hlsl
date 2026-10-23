@@ -1,0 +1,54 @@
+// gputest: a full-screen triangle writing every interpolator the game pixel shaders read.
+struct VSOut {
+    float4 pos : SV_Position;
+    [[vk::location(0)]] float4 v0 : TEXCOORD0;
+    [[vk::location(1)]] float4 v1 : TEXCOORD1;
+    [[vk::location(2)]] float4 v2 : TEXCOORD2;
+    [[vk::location(3)]] float4 v3 : TEXCOORD3;
+    [[vk::location(4)]] float4 v4 : TEXCOORD4;
+    [[vk::location(5)]] float4 v5 : TEXCOORD5;
+    [[vk::location(6)]] float4 v6 : TEXCOORD6;
+    [[vk::location(7)]] float4 v7 : TEXCOORD7;
+    [[vk::location(8)]] float4 v8 : TEXCOORD8;
+    [[vk::location(9)]] float4 v9 : TEXCOORD9;
+    [[vk::location(10)]] float4 v10 : TEXCOORD10;
+    [[vk::location(11)]] float4 v11 : TEXCOORD11;
+    [[vk::location(12)]] float4 v12 : TEXCOORD12;
+    [[vk::location(13)]] float4 v13 : TEXCOORD13;
+    [[vk::location(14)]] float4 v14 : TEXCOORD14;
+    [[vk::location(15)]] float4 v15 : TEXCOORD15;
+    [[vk::location(16)]] float4 v16 : COLOR0;
+    [[vk::location(17)]] float4 v17 : COLOR1;
+    [[vk::location(18)]] float4 v18 : COLOR2;
+    [[vk::location(19)]] float4 v19 : COLOR3;
+    [[vk::location(20)]] float4 v20 : COLOR4;
+    [[vk::location(21)]] float4 v21 : COLOR5;
+};
+VSOut main(uint id : SV_VertexID) {
+    VSOut o;
+    float2 uv = float2((id << 1) & 2, id & 2);
+    o.pos = float4(uv * 2.0 - 1.0, 0.5, 1.0);
+    o.v0 = float4(uv * 1.0, 0.05, 1.0);
+    o.v1 = float4(uv * 1.25, 0.15000000000000002, 1.0);
+    o.v2 = float4(uv * 1.5, 0.25, 1.0);
+    o.v3 = float4(uv * 1.75, 0.35000000000000003, 1.0);
+    o.v4 = float4(uv * 1.0, 0.45, 1.0);
+    o.v5 = float4(uv * 1.25, 0.55, 1.0);
+    o.v6 = float4(uv * 1.5, 0.6500000000000001, 1.0);
+    o.v7 = float4(uv * 1.75, 0.7500000000000001, 1.0);
+    o.v8 = float4(uv * 1.0, 0.05, 1.0);
+    o.v9 = float4(uv * 1.25, 0.15000000000000002, 1.0);
+    o.v10 = float4(uv * 1.5, 0.25, 1.0);
+    o.v11 = float4(uv * 1.75, 0.35000000000000003, 1.0);
+    o.v12 = float4(uv * 1.0, 0.45, 1.0);
+    o.v13 = float4(uv * 1.25, 0.55, 1.0);
+    o.v14 = float4(uv * 1.5, 0.6500000000000001, 1.0);
+    o.v15 = float4(uv * 1.75, 0.7500000000000001, 1.0);
+    o.v16 = float4(uv * 1.0, 0.05, 1.0);
+    o.v17 = float4(uv * 1.25, 0.15000000000000002, 1.0);
+    o.v18 = float4(uv * 1.5, 0.25, 1.0);
+    o.v19 = float4(uv * 1.75, 0.35000000000000003, 1.0);
+    o.v20 = float4(uv * 1.0, 0.45, 1.0);
+    o.v21 = float4(uv * 1.25, 0.55, 1.0);
+    return o;
+}
