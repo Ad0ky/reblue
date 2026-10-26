@@ -39,6 +39,8 @@
  * libraries, and the wrappers have to be defined before libnx.a enters the link.
  */
 
+#include <malloc.h>
+#include <new>
 #include <algorithm>
 #include <atomic>
 #include <cinttypes>
@@ -142,6 +144,7 @@ VentanaTiron g_tirones[kMaxTirones];
 std::atomic<u32> g_num_tirones{0};
 Sample g_samples[kMaxSamples];
 size_t g_sample_count = 0;
+u32 g_reports_skipped = 0;  // reports the heap had no room for (Report)
 
 std::atomic<u64> g_counters[kCounterCount];
 
@@ -238,6 +241,21 @@ extern "C" void RexSwitchPerfToggleAb(void) {
  * view), so that limit is the real ceiling, not free memory. When it runs out,
  * even committing 4 KB fails with 2001-0103 (resource exhausted).
  */
+extern "C" char* fake_heap_start;  // libnx's sbrk bounds: the malloc heap
+extern "C" char* fake_heap_end;
+
+/*
+ * The malloc heap: what is in use and how big it can get. InfoType_UsedMemorySize counts the whole
+ * heap hbloader handed over from the start, so it never says how full it is; this does. Mesa's GPU
+ * memory (nvmap) comes from it too.
+ */
+void Monton(u64* en_uso_mb, u64* tomado_mb, u64* tope_mb) {
+  const struct mallinfo mi = mallinfo();
+  *en_uso_mb = u64(mi.uordblks) >> 20;
+  *tomado_mb = u64(mi.arena) >> 20;
+  *tope_mb = (fake_heap_end > fake_heap_start) ? u64(fake_heap_end - fake_heap_start) >> 20 : 0;
+}
+
 void LimiteDeMapeo(u64* usado_mb, u64* tope_mb, u64* proceso_mb, u64* total_mb) {
   *usado_mb = *tope_mb = *proceso_mb = *total_mb = 0;
   u64 v = 0;
@@ -331,7 +349,7 @@ std::vector<Count> Histogram(std::vector<u64>& addrs) {
   return out;
 }
 
-void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
+void ReportImpl(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
             const char* mode) {
   const double seconds = double(elapsed_ticks) / double(tick_freq);
 
@@ -380,6 +398,8 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
 
   u64 lim_usado = 0, lim_tope = 0, proc_usado = 0, proc_total = 0;
   LimiteDeMapeo(&lim_usado, &lim_tope, &proc_usado, &proc_total);
+  u64 malloc_uso = 0, malloc_tomado = 0, malloc_tope = 0;
+  Monton(&malloc_uso, &malloc_tomado, &malloc_tope);
 
   double total_cpu = 0.0;
   for (size_t i : order) {
@@ -390,6 +410,7 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
                "lectura emulada %.0f, manejador SDK %.0f, reintento emulado %.0f, SEH %.0f, "
                "fisica confirmada %.0f, vistas %.0f | invitado %zu/%zu MB (respaldo/mapeado) | "
                "limite de mapeo %llu/%llu MB, proceso %llu/%llu MB | "
+               "malloc %llu MB en uso, %llu tomados de %llu, informes sin memoria %u | "
                "muestras %zu | vigilancia: %s | samplers: %.0f nuevos/s, %.0f parones/s\n",
                seconds, mode, double(counters_now[0] - counters_last[0]) / seconds, total_cpu,
                double(counters_now[1] - counters_last[1]) / seconds,
@@ -399,7 +420,8 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
                double(counters_now[17] - counters_last[17]) / seconds,
                double(counters_now[18] - counters_last[18]) / seconds,
                RexGmCommittedBytes() >> 20, RexGmMappedBytes() >> 20,
-               (u64)lim_usado, (u64)lim_tope, (u64)proc_usado, (u64)proc_total, g_sample_count,
+               (u64)lim_usado, (u64)lim_tope, (u64)proc_usado, (u64)proc_total,
+               (u64)malloc_uso, (u64)malloc_tomado, (u64)malloc_tope, g_reports_skipped, g_sample_count,
                 (RexGmModoProteccion() == 1   ? "permisos (paginas legibles)"
                  : RexGmModoProteccion() == 2 ? "desmapeo (cada lectura falla)"
                                               : "sin probar"),
@@ -782,6 +804,20 @@ struct TicOverlay {
   }
 };
 
+/*
+ * The report copies the stack samples and builds strings. When the heap is full that throws, and an
+ * exception that leaves this thread ends the whole process (std::terminate): the profiler must never
+ * be what kills the game. A skipped report is counted and said in the next one.
+ */
+void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount], const char* mode) {
+  try {
+    ReportImpl(elapsed_ticks, tick_freq, counters_last, mode);
+  } catch (const std::bad_alloc&) {
+    ++g_reports_skipped;
+    g_sample_count = 0;
+  }
+}
+
 void ProfilerMain(void*) {
   const u64 tick_freq = armGetSystemTickFreq();
 
@@ -911,13 +947,79 @@ __attribute__((constructor(102))) void StartProfiler() {
   }
 }
 
+/*
+ * Host thread stacks. The SDK gives every guest thread a 16 MB host stack, and libnx allocates it
+ * from the malloc heap at threadCreate and frees it at threadClose. The game makes and ends threads
+ * around loads, so 16 MB blocks come and go between everything else and the heap fragments until a
+ * large request fails even with memory free (the profiler's report failed that way after the first
+ * battle, and std::terminate ended the game; sa2-nx met the same and pools its stacks). Freed stacks
+ * of 1 MB and more are kept here and handed to the next thread of the same size, so they are
+ * allocated only up to the peak number of live threads. libnx maps a given block as it maps its own,
+ * and keeps the TLS and reent at its top: kPooledStackExtra leaves the thread its full stack.
+ */
+constexpr size_t kPooledStackMin = 1u << 20;
+constexpr size_t kPooledStackExtra = 64u << 10;
+constexpr size_t kPoolMax = 96;  // blocks the pool knows (live and free)
+
+struct PoolBlock {
+  void* mem;
+  size_t size;
+  bool free;
+};
+PoolBlock g_pool[kPoolMax];
+size_t g_pool_count = 0;
+Mutex g_pool_mutex;
+
+void* PoolTake(size_t size) {
+  mutexLock(&g_pool_mutex);
+  for (size_t i = 0; i < g_pool_count; ++i) {
+    if (g_pool[i].free && g_pool[i].size == size) {
+      g_pool[i].free = false;
+      void* mem = g_pool[i].mem;
+      mutexUnlock(&g_pool_mutex);
+      return mem;
+    }
+  }
+  void* mem = nullptr;
+  if (g_pool_count < kPoolMax) {
+    mem = aligned_alloc(0x1000, size);
+    if (mem) {
+      g_pool[g_pool_count++] = {mem, size, false};
+    }
+  }
+  mutexUnlock(&g_pool_mutex);
+  return mem;  // nullptr: libnx allocates it as before
+}
+
+void PoolGive(void* mem) {
+  mutexLock(&g_pool_mutex);
+  for (size_t i = 0; i < g_pool_count; ++i) {
+    if (g_pool[i].mem == mem) {
+      g_pool[i].free = true;
+      break;
+    }
+  }
+  mutexUnlock(&g_pool_mutex);
+}
+
 }  // namespace
 
 extern "C" {
 
 Result __wrap_threadCreate(Thread* t, ThreadFunc entry, void* arg, void* stack_mem,
                            size_t stack_sz, int prio, int cpuid) {
-  const Result rc = __real_threadCreate(t, entry, arg, stack_mem, stack_sz, prio, cpuid);
+  // Big stacks come from the pool (see StackPool): libnx would malloc and free one per thread.
+  void* pooled = nullptr;
+  size_t block = 0;
+  if (!stack_mem && stack_sz >= kPooledStackMin && !(stack_sz & 0xFFF)) {
+    block = stack_sz + kPooledStackExtra;
+    pooled = PoolTake(block);
+  }
+  const Result rc = pooled ? __real_threadCreate(t, entry, arg, pooled, block, prio, cpuid)
+                           : __real_threadCreate(t, entry, arg, stack_mem, stack_sz, prio, cpuid);
+  if (pooled && R_FAILED(rc)) {
+    PoolGive(pooled);
+  }
   if (R_SUCCEEDED(rc) && t) {
     Register(t->handle);
   }
@@ -925,10 +1027,17 @@ Result __wrap_threadCreate(Thread* t, ThreadFunc entry, void* arg, void* stack_m
 }
 
 Result __wrap_threadClose(Thread* t) {
+  void* stack = nullptr;
   if (t) {
     Unregister(t->handle);
+    if (!t->owns_stack_mem)
+      stack = t->stack_mem;
   }
-  return __real_threadClose(t);
+  const Result rc = __real_threadClose(t);
+  if (R_SUCCEEDED(rc) && stack) {
+    PoolGive(stack);  // ignores memory the pool did not hand out
+  }
+  return rc;
 }
 
 /* libnx calls that cost IPC or walk memory. See g_llamadas. */

@@ -53,6 +53,11 @@ Still to do:
    `gputest.bin` beside it, made from the game's shaders by `make_pack.py` (XenosRecomp's HLSL dump, DXC,
    SPIRV-Cross, `spv_to_dk_glsl.py`, uam), so the pack stays on the SD card, out of the repository.
    Go/no-go for the GPU side: the field is GPU-bound, and nfsmw-nx's first deko3d runs needed twice NVK's GPU time.
+
+   **Result (2026-10-23, console, 460.8 MHz): go.** deko3d with uam's code took 13.8 ms for the twelve shaders
+   against NVK's 15.3 (0.91x): `bd_normal_ps` 3.47 against 3.65 ms per full-screen draw (0.95x), `bd_toon_ps` 0.88x,
+   `bd_normal_ps_wind` 0.87x, `bd_normal_ps_nolight` 0.75x, `bd_shadowmap_ps` 0.54x; the simple post effects within
+   3% either way, `bd_pe_ps_dof` 1.09x. uam's shaders are not slower than NAK's for this game.
 5. The shader cache: the DKSH are made from the player's game, so they stay out of the repository like `generated/`.
 
 ## P1: device and presentation
