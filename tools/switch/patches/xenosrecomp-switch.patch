@@ -34,7 +34,7 @@ index d49bd32..3324b68 100644
 +    IDxcBlob* compile(const std::string& shaderSource, bool compilePixelShader, bool compileLibrary, bool compileSpirv, bool uboConstants = false);
  };
 diff --git a/XenosRecomp/main.cpp b/XenosRecomp/main.cpp
-index 754198c..e00ff2e 100644
+index 754198c..802fece 100644
 --- a/XenosRecomp/main.cpp
 +++ b/XenosRecomp/main.cpp
 @@ -29,6 +29,11 @@ struct RecompiledShader
@@ -49,7 +49,7 @@ index 754198c..e00ff2e 100644
      uint32_t specConstantsMask = 0;
      std::string sourceName;
  };
-@@ -160,6 +165,9 @@ int main(int argc, char** argv)
+@@ -160,13 +165,18 @@ int main(int argc, char** argv)
                  recompiler.recompile(shader.data, include);
  
                  shader.specConstantsMask = recompiler.specConstantsMask;
@@ -59,7 +59,19 @@ index 754198c..e00ff2e 100644
  
                  if (!hlslDumpDir.empty())
                  {
-@@ -209,6 +217,22 @@ int main(int argc, char** argv)
++                    // The hash in every name: shaders of the same file name in different folders (and the
++                    // containers of one file) would otherwise overwrite each other.
+                     auto path = std::filesystem::path(hlslDumpDir) /
+-                        (shader.sourceName.empty()
+-                            ? fmt::format("{}_{:016X}", recompiler.isPixelShader ? "ps" : "vs", hash)
+-                            : shader.sourceName);
++                        fmt::format("{}_{:016X}",
++                            shader.sourceName.empty() ? (recompiler.isPixelShader ? "ps" : "vs") : shader.sourceName,
++                            hash);
+                     path += ".hlsl";
+ 
+                     std::string contents = fmt::format(
+@@ -209,6 +219,22 @@ int main(int argc, char** argv)
  
                  spirv->Release();
  
@@ -82,7 +94,7 @@ index 754198c..e00ff2e 100644
                  size_t currentProgress = ++progress;
                  if ((currentProgress % 10) == 0 || (currentProgress == shaders.size() - 1))
                      fmt::println("Recompiling shaders... {}%", currentProgress / float(shaders.size()) * 100.0f);
-@@ -234,6 +258,11 @@ int main(int argc, char** argv)
+@@ -234,6 +260,11 @@ int main(int argc, char** argv)
  
          std::vector<uint8_t> dxil;
          std::vector<uint8_t> spirv;
@@ -94,7 +106,7 @@ index 754198c..e00ff2e 100644
  
          for (auto& [hash, shader] : shaders)
          {
-@@ -247,6 +276,11 @@ int main(int argc, char** argv)
+@@ -247,6 +278,11 @@ int main(int argc, char** argv)
              }
              
              spirv.insert(spirv.end(), shader.spirv.begin(), shader.spirv.end());
@@ -106,7 +118,7 @@ index 754198c..e00ff2e 100644
          }
  
          f.println("}};");
-@@ -285,6 +319,21 @@ int main(int argc, char** argv)
+@@ -285,6 +321,21 @@ int main(int argc, char** argv)
          f.println("const size_t g_spirvCacheDecompressedSize = {};", spirv.size());
          f.println("const size_t g_shaderCacheEntryCount = {};", shaders.size());
  

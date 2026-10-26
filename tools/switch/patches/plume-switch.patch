@@ -1,9 +1,9 @@
 diff --git a/plume_deko3d.cpp b/plume_deko3d.cpp
 new file mode 100644
-index 0000000..291dfd7
+index 0000000..5feb942
 --- /dev/null
 +++ b/plume_deko3d.cpp
-@@ -0,0 +1,1951 @@
+@@ -0,0 +1,2010 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): device, memory, resources, shaders and pipelines. The command lists,
 +// the queue and the swapchain are in plume_deko3d_commands.cpp. docs/deko3d-renderer.md is the design; the facts about
@@ -15,6 +15,7 @@ index 0000000..291dfd7
 +#include <pthread.h>
 +
 +#include <algorithm>
++#include <chrono>
 +#include <cassert>
 +#include <cinttypes>
 +#include <cstdarg>
@@ -61,6 +62,9 @@ index 0000000..291dfd7
 +
 +    static constexpr uint32_t alignUp(uint32_t v, uint32_t a) { return (v + a - 1) / a * a; }
 +    static constexpr uint64_t alignUp64(uint64_t v, uint64_t a) { return (v + a - 1) / a * a; }
++
++    static std::string g_dumpFolder;
++    void Deko3DSetDumpFolder(const char *folder) { g_dumpFolder = folder ? folder : ""; }
 +
 +    // FNV-1a 64: the variant cache key (tools/deko3d_shaders.py computes the same over the same text).
 +    static uint64_t fnv1a64(const void *data, size_t size) {
@@ -1187,6 +1191,10 @@ index 0000000..291dfd7
 +
 +    struct Deko3DShaderImpl : Deko3DShader {
 +        std::vector<SpecDefault> specDefaults;
++        // re:Blue (2026-10-26): the bits of constant 0 the shader reads ("// reblue-spec0-mask=0x..." in its text, from
++        // tools/switch/deko3d/make_dk_shaders.py); the others are dropped, so a value that differs only in bits the
++        // shader ignores is the same variant (and the build's DKSH cache has it).
++        uint32_t spec0Mask = ~0u;
 +        // Variants already looked up (spec values -> variant), so a pipeline does not hash the text again.
 +        std::mutex mutex;
 +        std::unordered_map<uint64_t, const DkShader *> known;
@@ -1232,6 +1240,12 @@ index 0000000..291dfd7
 +                shader->usage.zeroOutputMask = uint32_t(strtoul(shader->glsl.c_str() + z + 19, nullptr, 16));  // after "0x"
 +        }
 +        shader->specDefaults = parseSpecDefaults(shader->glsl);
++        {
++            const char *key = "\n// reblue-spec0-mask=0x";
++            const size_t m = shader->glsl.find(key);
++            if (m != std::string::npos)
++                shader->spec0Mask = uint32_t(strtoul(shader->glsl.c_str() + m + strlen(key), nullptr, 16));
++        }
 +        for (const SpecDefault &d : shader->specDefaults)
 +            shader->specIds.push_back(d.id);
 +        return shader;
@@ -1280,6 +1294,8 @@ index 0000000..291dfd7
 +                    break;
 +                job = compileQueue.front();
 +                compileQueue.erase(compileQueue.begin());
++                compileCurrent = job;
++                compileCurrentStartNs = armTicksToNs(armGetSystemTick());
 +            }
 +            static const uam::Stage stages[] = {uam::Stage::Vertex, uam::Stage::TessCtrl, uam::Stage::TessEval,
 +                                                uam::Stage::Geometry, uam::Stage::Fragment, uam::Stage::Compute};
@@ -1317,6 +1333,10 @@ index 0000000..291dfd7
 +            g_deko3dStats.shaderCompiles++;
 +            {
 +                std::lock_guard<std::mutex> lock(compileMutex);
++                if (compileReported == job)
++                    logf("uam: the long compile ended after %.1f s (%s)",
++                         double(armTicksToNs(armGetSystemTick()) - compileCurrentStartNs) / 1e9, r.ok ? "ok" : "failed");
++                compileCurrent = nullptr;
 +                job->ok = r.ok;
 +                *job->dksh = std::move(r.dksh);
 +                *job->log = std::move(r.log);
@@ -1352,7 +1372,32 @@ index 0000000..291dfd7
 +        }
 +        compileWake.notify_one();
 +        std::unique_lock<std::mutex> lock(compileMutex);
-+        compileDone.wait(lock, [&] { return job.done; });
++        // re:Blue (2026-10-26): a compile that runs past 10 s is reported once, with its GLSL written out: uam (nv50_ir's
++        // register allocation) was seen never to end on one of the game's shaders.
++        while (!compileDone.wait_for(lock, std::chrono::seconds(5), [&] { return job.done; })) {
++            const CompileJob *cur = compileCurrent;
++            if (cur == nullptr || cur == compileReported ||
++                armTicksToNs(armGetSystemTick()) - compileCurrentStartNs < 10'000'000'000ull)
++                continue;
++            compileReported = cur;
++            const uint64_t key = fnv1a64(cur->source->data(), cur->source->size());
++            std::string path;
++            if (!g_dumpFolder.empty()) {
++                char name[64];
++                snprintf(name, sizeof(name), "/uam_stuck_%016" PRIx64 "_%s.glsl", key,
++                         cur->stage == DkStage_Vertex ? "vert" : cur->stage == DkStage_Fragment ? "frag" : "other");
++                path = g_dumpFolder + name;
++                if (FILE *f = fopen(path.c_str(), "wb")) {
++                    fwrite(cur->source->data(), 1, cur->source->size(), f);
++                    fclose(f);
++                }
++                else {
++                    path.clear();
++                }
++            }
++            logf("uam: a compile has run for more than 10 s (variant %016" PRIx64 ", stage %u, %zu bytes of GLSL)%s%s",
++                 key, uint32_t(cur->stage), cur->source->size(), path.empty() ? "" : "; its GLSL is in ", path.c_str());
++        }
 +        if (lend) {
 +            compileWaiters.erase(std::find(compileWaiters.begin(), compileWaiters.end(), waiterPriority));
 +            applyCompilePriority();
@@ -1425,14 +1470,17 @@ index 0000000..291dfd7
 +        uint64_t specKey = 0xcbf29ce484222325ull;
 +        for (const SpecDefault &d : shader->specDefaults) {
 +            for (uint32_t i = 0; i < specConstantsCount; i++) {
-+                if (specConstants[i].index == d.id && specConstants[i].value != d.value) {
++                if (specConstants[i].index != d.id)
++                    continue;
++                const uint32_t value = d.id == 0 ? specConstants[i].value & shader->spec0Mask : specConstants[i].value;
++                if (value != d.value) {
 +                    char line[64];
-+                    snprintf(line, sizeof(line), "#define SPIRV_CROSS_CONSTANT_ID_%u %uu\n", d.id, specConstants[i].value);
++                    snprintf(line, sizeof(line), "#define SPIRV_CROSS_CONSTANT_ID_%u %uu\n", d.id, value);
 +                    defines += line;
 +                    specKey = mixHash(specKey, &d.id, sizeof(d.id));
-+                    specKey = mixHash(specKey, &specConstants[i].value, sizeof(uint32_t));
-+                    break;
++                    specKey = mixHash(specKey, &value, sizeof(uint32_t));
 +                }
++                break;
 +            }
 +        }
 +        {
@@ -1456,10 +1504,17 @@ index 0000000..291dfd7
 +        const uint64_t key = fnv1a64(source.data(), source.size());
 +        Deko3DShaderVariant *variant = nullptr;
 +        {
-+            std::lock_guard<std::mutex> lock(variantMutex);
-+            auto it = variants.find(key);
-+            if (it != variants.end())
-+                variant = it->second.get();
++            std::unique_lock<std::mutex> lock(variantMutex);
++            for (;;) {
++                auto it = variants.find(key);
++                if (it != variants.end()) {
++                    variant = it->second.get();
++                    break;
++                }
++                if (variantsPending.insert(key).second)
++                    break;  // this thread makes it
++                variantReady.wait(lock);
++            }
 +        }
 +        if (variant == nullptr) {
 +            std::vector<uint8_t> dksh;
@@ -1489,11 +1544,15 @@ index 0000000..291dfd7
 +            auto fresh = std::make_unique<Deko3DShaderVariant>();
 +            if (have)
 +                fresh->valid = loadCode(dksh, fresh->shader, shader->name.c_str());
-+            std::lock_guard<std::mutex> lock(variantMutex);
-+            auto &slot = variants[key];
-+            if (!slot)
-+                slot = std::move(fresh);
-+            variant = slot.get();
++            {
++                std::lock_guard<std::mutex> lock(variantMutex);
++                auto &slot = variants[key];
++                if (!slot)
++                    slot = std::move(fresh);
++                variant = slot.get();
++                variantsPending.erase(key);
++            }
++            variantReady.notify_all();
 +        }
 +        const DkShader *out = variant->valid ? &variant->shader : nullptr;
 +        std::lock_guard<std::mutex> lock(shader->mutex);
@@ -1957,10 +2016,10 @@ index 0000000..291dfd7
 +};
 diff --git a/plume_deko3d.h b/plume_deko3d.h
 new file mode 100644
-index 0000000..0b1c39b
+index 0000000..851c642
 --- /dev/null
 +++ b/plume_deko3d.h
-@@ -0,0 +1,692 @@
+@@ -0,0 +1,705 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): plume's render interface on deko3d, the Switch's own GPU API, for
 +// Renut's renderer (docs/deko3d-renderer.md). MIT, as plume. deko3d is zlib (fincs, devkitPro); the shaders are compiled
@@ -1988,6 +2047,7 @@ index 0000000..0b1c39b
 +#include <string>
 +#include <thread>
 +#include <unordered_map>
++#include <unordered_set>
 +#include <vector>
 +
 +namespace plume {
@@ -2026,6 +2086,9 @@ index 0000000..0b1c39b
 +    // Where the back end's messages go (stderr until set: the application's log, so they reach it on the console and in
 +    // an emulator alike).
 +    void SetDeko3DLogCallback(void (*callback)(const char *message));
++    // re:Blue (2026-10-26): where a shader whose uam compile runs longer than 10 s is written (its GLSL, to reproduce
++    // the compile elsewhere). Empty: not written, only reported.
++    void Deko3DSetDumpFolder(const char *folder);
 +
 +    struct Deko3DDevice;
 +    struct Deko3DCommandQueue;
@@ -2460,6 +2523,10 @@ index 0000000..0b1c39b
 +        std::atomic<uint64_t> codeEpoch{1}; // advances with each code load (command lists invalidate the shader cache)
 +        std::unordered_map<uint64_t, std::unique_ptr<Deko3DShaderVariant>> variants; // by variant source hash
 +        std::mutex variantMutex;
++        // re:Blue (2026-10-26): variants a thread is making (cache lookup or compile); another thread that needs one waits
++        // for it instead of compiling the same text again.
++        std::unordered_set<uint64_t> variantsPending;
++        std::condition_variable variantReady;
 +
 +        // The uam worker: one thread (uam is not reentrant), 8 MB of stack.
 +        std::thread compileThread;
@@ -2481,6 +2548,11 @@ index 0000000..0b1c39b
 +        int32_t compileAppliedPriority = -1;
 +        bool compileStop = false;
 +        bool compilerReady = false;
++        // re:Blue (2026-10-26): the job the uam thread is compiling and since when (compileMutex), so a waiting thread
++        // can report a compile that does not end (and write its GLSL out, Deko3DSetDumpFolder).
++        const CompileJob *compileCurrent = nullptr;
++        uint64_t compileCurrentStartNs = 0;
++        const CompileJob *compileReported = nullptr;
 +
 +        // Retired memory: freed once the queue has passed the submission that was current when it was retired.
 +        std::mutex retireMutex;

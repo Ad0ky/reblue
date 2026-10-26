@@ -15,6 +15,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace bd::gpu {
 
@@ -34,9 +35,18 @@ extern const Deko3DGameShader g_deko3dGameShaders[];
 extern const size_t g_deko3dGameShaderCount;
 extern const Deko3DHostShader g_deko3dHostShaders[];
 extern const size_t g_deko3dHostShaderCount;
+// The build's DKSH cache (make_dk_shaders.py --uam-variants): every variant compiled with uam flags
+// g_deko3dDkshFlags, as records of the cache file (switch_tuning.cpp), zlib. Count 0 when the build has none.
+extern const unsigned g_deko3dDkshFlags;
+extern const size_t g_deko3dDkshCount;
+extern const size_t g_deko3dDkshSize;
+extern const size_t g_deko3dDkshCompressedSize;
+extern const unsigned char g_deko3dDkshCompressed[];
 
 // A shader's blob (RenderShaderFormat::DEKO3D), or false. The pack is unpacked on the first call.
 bool Deko3DGameShaderBlob(uint64_t hash, const void *&data, size_t &size);
 bool Deko3DHostShaderBlob(const char *name, const void *&data, size_t &size);
+// The build's DKSH cache records, unpacked, when it was compiled with these uam flags (else false).
+bool Deko3DBuiltinDksh(unsigned uam_flags, std::vector<uint8_t> &records);
 
 } // namespace bd::gpu

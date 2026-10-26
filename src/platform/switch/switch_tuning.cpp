@@ -23,6 +23,7 @@
 #include <rex/ui/switch_apm.h>
 
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -31,6 +32,8 @@
 #include <vector>
 #if defined(PLUME_DEKO3D)
 #include <plume_deko3d.h>
+
+#include "gpu/shaders/deko3d_shaders.h"
 #endif
 
 #include "core/app_root.h"
@@ -50,6 +53,17 @@ REXCVAR_DEFINE_INT32(bd_switch_handheld_height, 540, "Switch",
                      "Render height in handheld mode (16:9): 540 = 960x540, "
                      "720 or 0 = the full 1280x720. Applied at start.")
     .range(0, 1080);
+
+#if defined(PLUME_DEKO3D)
+REXCVAR_DEFINE_INT32(bd_deko3d_uam_flags, 431, "Switch",
+                     "deko3d: uam's extra code generation passes (plume "
+                     "Deko3DOptions::uamFlags). 431 = banjo-nx's 447 without 16, "
+                     "the second compile per pixel shader that picks the "
+                     "cheaper code: on the console that compile never ended "
+                     "for one of the game's shaders. Each value has its own "
+                     "shader cache file.")
+    .range(0, 1023);
+#endif
 
 namespace bd::platform {
 
@@ -74,8 +88,40 @@ DkshCache &Dksh() {
   return c;
 }
 
-void OpenDkshCache(const std::string &path) {
+// Records [magic][hash][size][DKSH] from data into the cache; the bytes read up to the last whole record.
+size_t ReadDkshRecords(const uint8_t *data, size_t size, size_t *added) {
   auto &c = Dksh();
+  size_t at = 0;
+  while (size - at >= 16) {
+    uint32_t magic = 0, n = 0;
+    uint64_t hash = 0;
+    std::memcpy(&magic, data + at, 4);
+    std::memcpy(&hash, data + at + 4, 8);
+    std::memcpy(&n, data + at + 12, 4);
+    if (magic != kDkshRecordMagic || n == 0 || n > size - at - 16)
+      break;
+    if (c.entries.emplace(hash, std::vector<uint8_t>(data + at + 16, data + at + 16 + n)).second) {
+      c.bytes += n;
+      ++*added;
+    }
+    at += 16 + n;
+  }
+  return at;
+}
+
+void OpenDkshCache(const std::string &path, unsigned uam_flags) {
+  auto &c = Dksh();
+  {
+    // The build's variants first (make_dk_shaders.py --uam-variants): with them the console compiles only what
+    // the build could not foresee.
+    std::vector<uint8_t> built;
+    size_t added = 0;
+    if (bd::gpu::Deko3DBuiltinDksh(uam_flags, built))
+      ReadDkshRecords(built.data(), built.size(), &added);
+    BD_INFO("Switch: deko3d shaders compiled by the build: {} (uam flags {}, the build's {})", added, uam_flags,
+            bd::gpu::g_deko3dDkshFlags);
+  }
+  const size_t from_build = c.entries.size();
   long good_end = 0;
   if (FILE *f = std::fopen(path.c_str(), "rb")) {
     for (;;) {
@@ -88,8 +134,8 @@ void OpenDkshCache(const std::string &path) {
       std::vector<uint8_t> data(size);
       if (std::fread(data.data(), 1, size, f) != size)
         break;
-      c.bytes += size;
-      c.entries[hash] = std::move(data);
+      if (c.entries.emplace(hash, std::move(data)).second)
+        c.bytes += size;
       good_end = std::ftell(f);
     }
     std::fclose(f);
@@ -98,8 +144,8 @@ void OpenDkshCache(const std::string &path) {
   c.file = std::fopen(path.c_str(), good_end ? "r+b" : "wb");
   if (c.file)
     std::fseek(c.file, good_end, SEEK_SET);
-  BD_INFO("Switch: deko3d shader cache {}: {} shaders, {} KB{}", path,
-          c.entries.size(), c.bytes >> 10, c.file ? "" : " (read only)");
+  BD_INFO("Switch: deko3d shader cache {}: {} shaders ({} from the build), {} KB{}", path,
+          c.entries.size(), from_build, c.bytes >> 10, c.file ? "" : " (read only)");
   plume::SetDeko3DShaderCache(
       [](uint64_t hash, std::vector<uint8_t> &dksh) {
         auto &c = Dksh();
@@ -146,10 +192,18 @@ void ApplySwitchClocks() {
   plume::VulkanSetPipelineCachePath(file);
   BD_INFO("Switch: Vulkan pipeline cache at {}", file);
 #if defined(PLUME_DEKO3D)
+  {
+    plume::Deko3DOptions options = plume::Deko3DGetOptions();
+    options.uamFlags = static_cast<unsigned>(REXCVAR_GET(bd_deko3d_uam_flags));
+    plume::Deko3DSetOptions(options);
+    // A shader whose compile does not end is written here (uam_stuck_*.glsl).
+    static const std::string logs = (bd::AppRootFolder() / "logs").string();
+    plume::Deko3DSetDumpFolder(logs.c_str());
+  }
+  const unsigned uam_flags = plume::Deko3DGetOptions().uamFlags;
   OpenDkshCache(
-      (dir / ("deko3d_shaders_" +
-              std::to_string(plume::Deko3DGetOptions().uamFlags) + ".bin"))
-          .string());
+      (dir / ("deko3d_shaders_" + std::to_string(uam_flags) + ".bin")).string(),
+      uam_flags);
 #endif
 }
 

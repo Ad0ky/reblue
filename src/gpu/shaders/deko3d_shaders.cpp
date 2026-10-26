@@ -75,6 +75,20 @@ bool Deko3DHostShaderBlob(const char *name, const void *&data, size_t &size) {
   return false;
 }
 
+bool Deko3DBuiltinDksh(unsigned uam_flags, std::vector<uint8_t> &records) {
+  if (g_deko3dDkshCount == 0 || uam_flags != g_deko3dDkshFlags)
+    return false;
+  records.resize(g_deko3dDkshSize);
+  mz_ulong n = mz_ulong(g_deko3dDkshSize);
+  const int rc = mz_uncompress(records.data(), &n, g_deko3dDkshCompressed, mz_ulong(g_deko3dDkshCompressedSize));
+  if (rc != MZ_OK || n != g_deko3dDkshSize) {
+    BD_ERROR("deko3d: the build's DKSH cache did not unpack ({}, {} of {} bytes)", rc, size_t(n), g_deko3dDkshSize);
+    records.clear();
+    return false;
+  }
+  return true;
+}
+
 } // namespace bd::gpu
 
 #endif // PLUME_DEKO3D

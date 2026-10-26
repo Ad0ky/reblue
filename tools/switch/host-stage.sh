@@ -162,8 +162,22 @@ if [ "${DEKO3D:-1}" = 1 ]; then
             -DSPIRV_CROSS_ENABLE_TESTS=OFF -DSPIRV_CROSS_CLI=ON >/dev/null
         cmake --build "$spirv_cross/build" --target spirv-cross -j "$JOBS" >/dev/null
     fi
+    # uam on this machine: the variants the console would compile, compiled here into the build's DKSH cache
+    # (make_dk_shaders.py --uam-variants). The flags must be the console's (bd_deko3d_uam_flags' default).
+    uam_flags=431
+    uam_host="$host/uam-host"
+    uam_src_key="$(find thirdparty/uam tools/switch/deko3d/uam_variants.cpp -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+    if [ ! -x "$uam_host/uam_variants" ] || [ "$(cat "$uam_host/src.key" 2>/dev/null)" != "$uam_src_key" ]; then
+        log "uam for the build machine (the DKSH cache)"
+        cmake -S thirdparty/uam -B "$uam_host" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX >/dev/null || die "uam configure failed"
+        cmake --build "$uam_host" --target uamlib -j "$JOBS" >/dev/null || die "uam build failed"
+        $CXX -O2 -std=c++17 tools/switch/deko3d/uam_variants.cpp -Ithirdparty/uam "$uam_host/libuamlib.a" -lpthread \
+            -o "$uam_host/uam_variants" || die "uam_variants build failed"
+        echo "$uam_src_key" > "$uam_host/src.key"
+    fi
     dk_key="$( { echo "$shader_key"; sha256sum tools/switch/deko3d/*.py src/gpu/shaders/hlsl/*; \
-                 echo "$spirv_cross_tag"; } | sha256sum | cut -d' ' -f1)"
+                 echo "$spirv_cross_tag $uam_src_key $uam_flags"; } | sha256sum | cut -d' ' -f1)"
     dk_stamp="$host/deko3d_shaders.key"
     if [ -f "$host/deko3d_shaders.cpp" ] && [ -f "$dk_stamp" ] && [ "$(cat "$dk_stamp")" = "$dk_key" ]; then
         log "deko3d shaders: up to date"
@@ -176,6 +190,7 @@ if [ "${DEKO3D:-1}" = 1 ]; then
             "$host/hlsl" >/dev/null
         SPIRV_CROSS="$spirv_cross/build/spirv-cross" python3 tools/switch/deko3d/make_dk_shaders.py \
             --repo "$root" --hlsl-dump "$host/hlsl" --jobs "$JOBS" \
+            --uam-variants "$uam_host/uam_variants" --uam-flags "$uam_flags" \
             --dxc "$root/thirdparty/XenosRecomp/thirdparty/dxc-bin/bin/x64/dxc-linux" \
             --out "$host/deko3d_shaders.cpp" || die "deko3d shaders failed"
         echo "$dk_key" > "$dk_stamp"

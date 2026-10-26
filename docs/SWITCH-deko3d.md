@@ -80,6 +80,22 @@ The NRO carries both back ends; `bd_switch_backend` in the config picks one at s
 
 If it fails on the console, `bd_switch_backend = "nvk"` gives the NVK renderer back without another build.
 
+First console run (2026-10-26): the title and menus ran at 59 fps on deko3d (GPU 6.9 ms a frame). Loading the field
+hung: uam's thread spent minutes in nv50_ir's register allocation, in the second compile banjo-nx's uam flag 16 makes
+of a pixel shader, while the draw thread waited for that pipeline. The same variants compile on the PC in under 3 s
+each, so it was not reproduced. Changes after it:
+
+- `bd_deko3d_uam_flags` (default 431 = 447 without 16): no second compile.
+- The build compiles every variant with uam on the PC (`tools/switch/deko3d/uam_variants.cpp`,
+  `make_dk_shaders.py --uam-variants`): 286 variants for the 142 game shaders (every combination of the
+  `g_SpecConstants` bits each one reads) and re:Blue's 17, 1.8 MB, 0.6 MB in the NRO. The console loads them as its
+  DKSH cache and compiles only what the build could not foresee. plume masks constant 0 by the bits a shader reads
+  (`// reblue-spec0-mask=` in its text), so the keys are known in advance; two threads asking for one variant compile
+  it once.
+- A uam compile that runs past 10 s is reported in the log and its GLSL written to `logs/uam_stuck_*.glsl`.
+- XenosRecomp's HLSL dump named files by their source name, and `bd_cri_movie.vso` and `.pso` overwrote each other:
+  the movie vertex shader (0x815DF1B3CCBFAA4E) was missing. The names now carry the hash.
+
 ## P1: device and presentation
 
 - banjo-nx's plume deko3d back end into `thirdparty/plume` (it already has `setGraphicsDescriptorSetDynamic`, as
