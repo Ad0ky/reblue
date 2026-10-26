@@ -4,13 +4,13 @@
 
 #include "bd_pe_ps_common.hlsli"
 
-#ifdef __spirv__
+#if defined(__spirv__) && !defined(REBLUE_UBO_CONSTANTS) // device addresses; else the cbuffers (D3D12, uniform buffers)
 
 #define g_vParam vk::RawBufferLoad<float4>(g_PushConstants.PixelShaderConstants + 432, 0x10)
 
 #else
 
-cbuffer PixelShaderConstants : register(b1, space4)
+REBLUE_CBUFFER_BINDING(1) cbuffer PixelShaderConstants : register(b1, space4)
 {
 	float4 g_vParam : packoffset(c27);
 };

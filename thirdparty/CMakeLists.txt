@@ -25,6 +25,36 @@ if(REBLUE_SWITCH)
         message(FATAL_ERROR "SDK VMA header missing at ${_reblue_sdk_vma}: run the host stage first")
     endif()
     target_include_directories(plume BEFORE PUBLIC "${_reblue_sdk_vma}")
+    # deko3d back end (docs/SWITCH-deko3d.md): banjo-nx's plume_deko3d*.cpp, built beside the Vulkan one so the
+    # NRO can run either (bd_switch_backend). uam compiles the shaders on the console; its Mesa 19 and NVK's newer
+    # Mesa define C functions of the same names with other signatures, so uam goes in as one object whose strong
+    # symbols are local but its API (plume_uam_localize.cmake, as banjo-nx and sa2-nx do).
+    if(REBLUE_SWITCH_DEKO3D)
+        if(NOT EXISTS "${DEVKITPRO}/libnx/lib/libdeko3d.a")
+            message(FATAL_ERROR "REBLUE_SWITCH_DEKO3D: devkitPro's deko3d is not installed (dkp-pacman -S deko3d)")
+        endif()
+        if(NOT TARGET uamlib)
+            set(NX_ROOT "${DEVKITPRO}/libnx")
+            add_subdirectory(uam "${CMAKE_CURRENT_BINARY_DIR}/uam" EXCLUDE_FROM_ALL)
+        endif()
+        target_sources(plume PRIVATE plume/plume_deko3d.cpp plume/plume_deko3d_commands.cpp)
+        target_compile_definitions(plume PUBLIC PLUME_DEKO3D=1)
+        target_include_directories(plume PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/uam")
+        set(_dk_bin "${DEVKITPRO}/devkitA64/bin")
+        set(_uam_local "${CMAKE_CURRENT_BINARY_DIR}/uam_local.o")
+        add_custom_command(
+            OUTPUT "${_uam_local}"
+            COMMAND "${CMAKE_COMMAND}" "-DLD=${_dk_bin}/aarch64-none-elf-ld" "-DNM=${_dk_bin}/aarch64-none-elf-nm"
+                    "-DOBJCOPY=${_dk_bin}/aarch64-none-elf-objcopy" "-DARCHIVE=$<TARGET_FILE:uamlib>"
+                    "-DOUT=${_uam_local}" -P "${CMAKE_CURRENT_SOURCE_DIR}/plume/plume_uam_localize.cmake"
+            DEPENDS uamlib "${CMAKE_CURRENT_SOURCE_DIR}/plume/plume_uam_localize.cmake"
+            COMMENT "uam with its strong symbols local but its API (uam_local.o)"
+            VERBATIM)
+        add_custom_target(reblue_uam_local DEPENDS "${_uam_local}")
+        add_dependencies(plume reblue_uam_local)
+        target_link_libraries(plume PUBLIC "${_uam_local}" "${DEVKITPRO}/libnx/lib/libdeko3d.a")
+        message(STATUS "re:Blue: plume's deko3d back end with uam (thirdparty/uam)")
+    endif()
     # XenosRecomp and dxc are host programs; the host stage of
     # tools/switch/build-switch.sh runs them. Only dxc's command line is needed
     # here, for re:Blue's own HLSL (cmake/shaders.cmake), and the vendored

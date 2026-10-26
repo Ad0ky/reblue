@@ -6,11 +6,11 @@
 // Declared field-by-field, not via DEFINE_SHARED_CONSTANTS(): this shader is
 // built without REBLUE_RECOMP, so that macro would place them on the other
 // layout's offsets.
-#ifdef __spirv__
+#if defined(__spirv__) && !defined(REBLUE_UBO_CONSTANTS) // device addresses; else the cbuffers (D3D12, uniform buffers)
 #define Tex0_ResourceDescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 0)
 #define Tex0_SamplerDescriptorIndex  vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 192)
 #else
-cbuffer SharedConstants : register(b2, space4)
+REBLUE_CBUFFER_BINDING(2) cbuffer SharedConstants : register(b2, space4)
 {
     uint Tex0_ResourceDescriptorIndex : packoffset(c0.x);   // texture2DIndices[0]
     uint Tex0_SamplerDescriptorIndex  : packoffset(c12.x);  // samplerIndices[0]

@@ -57,6 +57,8 @@ apply_chain() { # <dir> <patch>...
         return
     fi
     git -C "$dir" checkout -q -- .
+    # Files a patch added last time (untracked) would make it fail to apply again.
+    git -C "$dir" clean -fdq
     local patch
     for patch in "$@"; do
         git -C "$dir" apply "$patch" || die "$(basename "$patch") does not apply to $dir"
@@ -138,6 +140,46 @@ else
     LD_LIBRARY_PATH="$root/thirdparty/XenosRecomp/thirdparty/dxc-bin/lib/x64" \
         "$xenos" assets/shaders "$host/shader_cache.cpp" thirdparty/XenosRecomp/XenosRecomp/shader_common.h
     echo "$shader_key" > "$shader_stamp"
+fi
+
+# ---------------------------------------------------------------- deko3d shaders (DEKO3D=1, the default)
+# Every shader as GLSL for uam (docs/SWITCH-deko3d.md): XenosRecomp's HLSL of the game shaders and re:Blue's own
+# HLSL, through DXC, SPIRV-Cross and tools/switch/deko3d/spv_to_dk_glsl.py, into out/switch-host/deko3d_shaders.cpp.
+if [ "${DEKO3D:-1}" = 1 ]; then
+    if ! command -v spirv-dis >/dev/null; then
+        log "Installing spirv-tools (spirv-dis)"
+        (apt-get update -qq && apt-get install -y -qq --no-install-recommends spirv-tools) >/dev/null \
+            || die "spirv-dis is missing and spirv-tools could not be installed"
+    fi
+    spirv_cross_tag="vulkan-sdk-1.4.363.0"
+    spirv_cross="$host/spirv-cross-$spirv_cross_tag"
+    if [ ! -x "$spirv_cross/build/spirv-cross" ]; then
+        log "SPIRV-Cross $spirv_cross_tag"
+        rm -rf "$spirv_cross"
+        git clone -q --depth 1 --branch "$spirv_cross_tag" https://github.com/KhronosGroup/SPIRV-Cross "$spirv_cross"
+        cmake -S "$spirv_cross" -B "$spirv_cross/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX \
+            -DSPIRV_CROSS_ENABLE_TESTS=OFF -DSPIRV_CROSS_CLI=ON >/dev/null
+        cmake --build "$spirv_cross/build" --target spirv-cross -j "$JOBS" >/dev/null
+    fi
+    dk_key="$( { echo "$shader_key"; sha256sum tools/switch/deko3d/*.py src/gpu/shaders/hlsl/*; \
+                 echo "$spirv_cross_tag"; } | sha256sum | cut -d' ' -f1)"
+    dk_stamp="$host/deko3d_shaders.key"
+    if [ -f "$host/deko3d_shaders.cpp" ] && [ -f "$dk_stamp" ] && [ "$(cat "$dk_stamp")" = "$dk_key" ]; then
+        log "deko3d shaders: up to date"
+    else
+        log "deko3d shaders (HLSL dump, DXC, SPIRV-Cross, GLSL for uam)"
+        rm -rf "$host/hlsl"
+        mkdir -p "$host/hlsl"
+        LD_LIBRARY_PATH="$root/thirdparty/XenosRecomp/thirdparty/dxc-bin/lib/x64" \
+            "$xenos" assets/shaders "$host/hlsl/.shader_cache.cpp" thirdparty/XenosRecomp/XenosRecomp/shader_common.h \
+            "$host/hlsl" >/dev/null
+        SPIRV_CROSS="$spirv_cross/build/spirv-cross" python3 tools/switch/deko3d/make_dk_shaders.py \
+            --repo "$root" --hlsl-dump "$host/hlsl" --jobs "$JOBS" \
+            --dxc "$root/thirdparty/XenosRecomp/thirdparty/dxc-bin/bin/x64/dxc-linux" \
+            --out "$host/deko3d_shaders.cpp" || die "deko3d shaders failed"
+        echo "$dk_key" > "$dk_stamp"
+    fi
 fi
 
 log "Host stage done"

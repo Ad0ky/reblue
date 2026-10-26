@@ -8,7 +8,7 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-        clang-19 cmake ninja-build git python3 ca-certificates make pkg-config \
+        clang-19 cmake ninja-build git python3 ca-certificates make pkg-config spirv-tools \
         libx11-xcb-dev libwayland-dev \
  && rm -rf /var/lib/apt/lists/* \
  && git config --system --add safe.directory '*'

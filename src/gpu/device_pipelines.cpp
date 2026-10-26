@@ -243,34 +243,23 @@ bool BuildPipelineLayout(VideoState &s) {
 }
 
 bool BuildCopyPipeline(VideoState &s) {
-  s.copy_vs = s.device->createShader(REBLUE_SHADER_BLOB(copy_vs), "main",
-                                     kHostShaderFormat);
-  s.copy_color_ps = s.device->createShader(REBLUE_SHADER_BLOB(copy_color_ps),
-                                           "main", kHostShaderFormat);
-  s.copy_depth_ps = s.device->createShader(REBLUE_SHADER_BLOB(copy_depth_ps),
-                                           "main", kHostShaderFormat);
-  s.gamma_correction_ps = s.device->createShader(
-      REBLUE_SHADER_BLOB(gamma_correction_ps), "main", kHostShaderFormat);
-  s.occlusion_count_ps = s.device->createShader(
-      REBLUE_SHADER_BLOB(pfx_occlusion_count_ps), "main", kHostShaderFormat);
+  s.copy_vs = REBLUE_CREATE_HOST_SHADER(s.device, copy_vs);
+  s.copy_color_ps = REBLUE_CREATE_HOST_SHADER(s.device, copy_color_ps);
+  s.copy_depth_ps = REBLUE_CREATE_HOST_SHADER(s.device, copy_depth_ps);
+  s.gamma_correction_ps = REBLUE_CREATE_HOST_SHADER(s.device, gamma_correction_ps);
+  s.occlusion_count_ps = REBLUE_CREATE_HOST_SHADER(s.device, pfx_occlusion_count_ps);
   if (!s.copy_vs || !s.copy_color_ps || !s.copy_depth_ps ||
       !s.gamma_correction_ps || !s.occlusion_count_ps) {
     BD_ERROR("Plume createShader for copy helpers failed");
     return false;
   }
 
-  s.resolve_msaa_color_ps[0] = s.device->createShader(
-      REBLUE_SHADER_BLOB(resolve_msaa_color_2x), "main", kHostShaderFormat);
-  s.resolve_msaa_color_ps[1] = s.device->createShader(
-      REBLUE_SHADER_BLOB(resolve_msaa_color_4x), "main", kHostShaderFormat);
-  s.resolve_msaa_color_ps[2] = s.device->createShader(
-      REBLUE_SHADER_BLOB(resolve_msaa_color_8x), "main", kHostShaderFormat);
-  s.resolve_msaa_depth_ps[0] = s.device->createShader(
-      REBLUE_SHADER_BLOB(resolve_msaa_depth_2x), "main", kHostShaderFormat);
-  s.resolve_msaa_depth_ps[1] = s.device->createShader(
-      REBLUE_SHADER_BLOB(resolve_msaa_depth_4x), "main", kHostShaderFormat);
-  s.resolve_msaa_depth_ps[2] = s.device->createShader(
-      REBLUE_SHADER_BLOB(resolve_msaa_depth_8x), "main", kHostShaderFormat);
+  s.resolve_msaa_color_ps[0] = REBLUE_CREATE_HOST_SHADER(s.device, resolve_msaa_color_2x);
+  s.resolve_msaa_color_ps[1] = REBLUE_CREATE_HOST_SHADER(s.device, resolve_msaa_color_4x);
+  s.resolve_msaa_color_ps[2] = REBLUE_CREATE_HOST_SHADER(s.device, resolve_msaa_color_8x);
+  s.resolve_msaa_depth_ps[0] = REBLUE_CREATE_HOST_SHADER(s.device, resolve_msaa_depth_2x);
+  s.resolve_msaa_depth_ps[1] = REBLUE_CREATE_HOST_SHADER(s.device, resolve_msaa_depth_4x);
+  s.resolve_msaa_depth_ps[2] = REBLUE_CREATE_HOST_SHADER(s.device, resolve_msaa_depth_8x);
   for (int i = 0; i < 3; i++) {
     if (!s.resolve_msaa_color_ps[i] || !s.resolve_msaa_depth_ps[i]) {
       BD_ERROR("Plume createShader for MSAA resolve helpers failed");

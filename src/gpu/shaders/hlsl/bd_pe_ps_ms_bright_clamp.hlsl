@@ -4,7 +4,7 @@
 
 #include "bd_pe_ps_common.hlsli"
 
-#ifdef __spirv__
+#if defined(__spirv__) && !defined(REBLUE_UBO_CONSTANTS) // device addresses; else the cbuffers (D3D12, uniform buffers)
 
 #define g_vCount vk::RawBufferLoad<float4>(g_PushConstants.PixelShaderConstants + 416, 0x10)
 #define g_vSampleOffsets(INDEX) select((INDEX) < 224, vk::RawBufferLoad<float4>(g_PushConstants.PixelShaderConstants + (0 + min(INDEX, 223)) * 16, 0x10), 0.0)
@@ -12,13 +12,14 @@
 
 #else
 
-cbuffer PixelShaderConstants : register(b1, space4)
+REBLUE_CBUFFER_BINDING(1) cbuffer PixelShaderConstants : register(b1, space4)
 {
-	float4 g_vCount : packoffset(c26);
+	// In offset order: SPIR-V wants a block's members by increasing offset.
 	float4 g_vSampleOffsets[13] : packoffset(c0);
 #define g_vSampleOffsets(INDEX) select((INDEX) < 224, g_vSampleOffsets[min(INDEX, 223)], 0.0)
 	float4 g_vSampleWeights[13] : packoffset(c13);
 #define g_vSampleWeights(INDEX) select((INDEX) < 211, g_vSampleWeights[min(INDEX, 210)], 0.0)
+	float4 g_vCount : packoffset(c26);
 };
 
 #endif

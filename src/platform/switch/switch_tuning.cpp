@@ -22,9 +22,16 @@
 #include <rex/cvar.h>
 #include <rex/ui/switch_apm.h>
 
+#include <cstdio>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <system_error>
+#include <unordered_map>
+#include <vector>
+#if defined(PLUME_DEKO3D)
+#include <plume_deko3d.h>
+#endif
 
 #include "core/app_root.h"
 #include "core/logging.h"
@@ -46,6 +53,80 @@ REXCVAR_DEFINE_INT32(bd_switch_handheld_height, 540, "Switch",
 
 namespace bd::platform {
 
+#if defined(PLUME_DEKO3D)
+namespace {
+
+// The deko3d back end's compiled shaders (DKSH, by the hash of the GLSL variant
+// uam compiled) in one file, <install>/cache/deko3d_shaders.bin: records of
+// [u32 magic][u64 hash][u32 size][size bytes], appended as uam makes them, all
+// read at start. A torn last record (power cut mid-write) ends the read and is
+// overwritten by the next append. Changing uam's options changes the file name.
+struct DkshCache {
+  std::mutex mutex;
+  std::unordered_map<uint64_t, std::vector<uint8_t>> entries;
+  FILE *file = nullptr;
+  size_t bytes = 0;
+};
+constexpr uint32_t kDkshRecordMagic = 0x48534B44; // "DKSH"
+
+DkshCache &Dksh() {
+  static DkshCache c;
+  return c;
+}
+
+void OpenDkshCache(const std::string &path) {
+  auto &c = Dksh();
+  long good_end = 0;
+  if (FILE *f = std::fopen(path.c_str(), "rb")) {
+    for (;;) {
+      uint32_t magic = 0, size = 0;
+      uint64_t hash = 0;
+      if (std::fread(&magic, 4, 1, f) != 1 || magic != kDkshRecordMagic ||
+          std::fread(&hash, 8, 1, f) != 1 || std::fread(&size, 4, 1, f) != 1 ||
+          size == 0 || size > (16u << 20))
+        break;
+      std::vector<uint8_t> data(size);
+      if (std::fread(data.data(), 1, size, f) != size)
+        break;
+      c.bytes += size;
+      c.entries[hash] = std::move(data);
+      good_end = std::ftell(f);
+    }
+    std::fclose(f);
+  }
+  // r+ keeps the records, then the torn tail (if any) is overwritten.
+  c.file = std::fopen(path.c_str(), good_end ? "r+b" : "wb");
+  if (c.file)
+    std::fseek(c.file, good_end, SEEK_SET);
+  BD_INFO("Switch: deko3d shader cache {}: {} shaders, {} KB{}", path,
+          c.entries.size(), c.bytes >> 10, c.file ? "" : " (read only)");
+  plume::SetDeko3DShaderCache(
+      [](uint64_t hash, std::vector<uint8_t> &dksh) {
+        auto &c = Dksh();
+        std::lock_guard lock(c.mutex);
+        auto it = c.entries.find(hash);
+        if (it == c.entries.end())
+          return false;
+        dksh = it->second;
+        return true;
+      },
+      [](uint64_t hash, const std::vector<uint8_t> &dksh) {
+        auto &c = Dksh();
+        std::lock_guard lock(c.mutex);
+        if (dksh.empty() || !c.entries.emplace(hash, dksh).second || !c.file)
+          return;
+        const uint32_t size = static_cast<uint32_t>(dksh.size());
+        std::fwrite(&kDkshRecordMagic, 4, 1, c.file);
+        std::fwrite(&hash, 8, 1, c.file);
+        std::fwrite(&size, 4, 1, c.file);
+        std::fwrite(dksh.data(), 1, size, c.file);
+        std::fflush(c.file);
+      });
+}
+
+} // namespace
+#endif
+
 void ApplySwitchClocks() {
   const int mhz = REXCVAR_GET(bd_switch_gpu_mhz);
   RexSwitchApmPedirGpuMhz(mhz);
@@ -64,6 +145,12 @@ void ApplySwitchClocks() {
   const std::string file = (dir / "vulkan_pipelines.bin").string();
   plume::VulkanSetPipelineCachePath(file);
   BD_INFO("Switch: Vulkan pipeline cache at {}", file);
+#if defined(PLUME_DEKO3D)
+  OpenDkshCache(
+      (dir / ("deko3d_shaders_" +
+              std::to_string(plume::Deko3DGetOptions().uamFlags) + ".bin"))
+          .string());
+#endif
 }
 
 bool SwitchHandheldRenderSize(u32 &w, u32 &h) {

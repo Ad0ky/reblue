@@ -4,11 +4,11 @@
 
 #include "thirdparty/XenosRecomp/XenosRecomp/shader_common.h"
 
-#ifdef __spirv__
+#if defined(__spirv__) && !defined(REBLUE_UBO_CONSTANTS) // device addresses; else the cbuffers (D3D12, uniform buffers)
 #define g_BlitHalfPixelOffset \
     vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 336)
 #else
-cbuffer SharedConstants : register(b2, space4)
+REBLUE_CBUFFER_BINDING(2) cbuffer SharedConstants : register(b2, space4)
 {
     float2 g_BlitHalfPixelOffset : packoffset(c21.x);
 };

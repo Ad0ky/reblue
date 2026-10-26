@@ -17,6 +17,9 @@
 #include <plume_d3d12.h>
 #else
 #include <plume_vulkan.h>
+#if defined(PLUME_DEKO3D)
+#include <plume_deko3d.h>
+#endif
 #endif
 
 #include "core/logging.h"
@@ -108,6 +111,13 @@ bool CheckDeviceRemoved(const char *context) {
     return true;
 
   auto &s = state();
+#if defined(PLUME_DEKO3D)
+  if (UsingDeko3D()) {
+    if (s.device && plume::Deko3DDeviceLost(s.device.get()))
+      return ReportDeviceLost(context, "deko3d queue error", 0);
+    return false;
+  }
+#endif
   auto *dev = static_cast<plume::VulkanDevice *>(s.device.get());
   if (!dev || dev->vk == VK_NULL_HANDLE)
     return false; // no device yet

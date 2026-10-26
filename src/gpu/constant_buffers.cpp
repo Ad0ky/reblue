@@ -315,7 +315,7 @@ namespace bd::gpu {
 
 bool UboConstantsEnabled() {
   static const bool enabled = [] {
-    const bool on = REXCVAR_GET(bd_switch_ubo_constants);
+    const bool on = REXCVAR_GET(bd_switch_ubo_constants) || UsingDeko3D();
     BD_INFO("Switch: guest shader constants through {}",
             on ? "uniform buffers (set 5)" : "device addresses");
     std::fprintf(stderr, "[ubo] guest shader constants through %s\n",

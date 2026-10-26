@@ -155,10 +155,8 @@ bool ImGuiOverlayDrawer::TryInitDeviceResources() {
   if (!device)
     return false;
 
-  vs_ = device->createShader(REBLUE_SHADER_BLOB(imgui_vs), "main",
-                             kHostShaderFormat);
-  ps_ = device->createShader(REBLUE_SHADER_BLOB(imgui_ps), "main",
-                             kHostShaderFormat);
+  vs_ = REBLUE_CREATE_HOST_SHADER(device, imgui_vs);
+  ps_ = REBLUE_CREATE_HOST_SHADER(device, imgui_ps);
   if (!vs_ || !ps_) {
     BD_ERROR("ImGui overlay: createShader failed");
     return false;

@@ -12,6 +12,7 @@ include(CMakeDependentOption)
 # sets REXGLUE_PLATFORM_SWITCH; the build runs through tools/switch/build-switch.sh.
 # See docs/SWITCH.md.
 set(REBLUE_SWITCH OFF)
+option(REBLUE_SWITCH_DEKO3D "Switch: build plume's deko3d back end beside NVK (docs/SWITCH-deko3d.md)" OFF)
 if(REXGLUE_PLATFORM_SWITCH)
     set(REBLUE_SWITCH ON)
     include(cmake/switch.cmake)

@@ -15,6 +15,9 @@
 #error "backend-conditional: move this TU to reblue_backend_only in src/CMakeLists.txt"
 #endif
 
+#include <cstddef>
+#include <memory>
+
 #include <rex/types.h>
 
 #include <plume_render_interface.h>
@@ -59,5 +62,16 @@ inline constexpr u32 kCopyPushConstantRangeIndex = 0;
 inline constexpr u32 kCopyPushConstantByteOffset = 24;
 inline constexpr u32 kOcclusionDescriptorSetIndex = 4;
 #endif
+
+// The Switch build can carry plume's deko3d back end beside NVK (REBLUE_SWITCH_DEKO3D, which defines PLUME_DEKO3D):
+// bd_switch_backend picks one at start (device.cpp). False on every other build.
+bool UsingDeko3D();
+
+// One of re:Blue's own shaders (src/gpu/shaders/hlsl/<name>.hlsl) for the active back end: the build's blob, or on
+// deko3d its GLSL from the deko3d shader pack (gpu/shaders/deko3d_shaders.h).
+std::unique_ptr<plume::RenderShader> CreateHostShader(plume::RenderDevice *device, const char *name,
+                                                      const void *blob, size_t size);
+#define REBLUE_CREATE_HOST_SHADER(device, name)                                \
+  ::bd::gpu::CreateHostShader(&*(device), #name, REBLUE_SHADER_BLOB(name))
 
 } // namespace bd::gpu

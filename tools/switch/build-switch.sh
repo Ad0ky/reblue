@@ -51,8 +51,13 @@ command -v ninja >/dev/null || die "ninja missing"
 
 # GPUTEST=1: also the GPU test NRO (tools/switch/gputest), which needs devkitPro's deko3d.
 GPUTEST="${GPUTEST:-0}"
-if [ "$GPUTEST" = 1 ] && [ ! -f "$DEVKITPRO/libnx/lib/libdeko3d.a" ]; then
-    log "Installing devkitPro's deko3d (for the GPU test)"
+# DEKO3D=1 (the default): the deko3d back end beside NVK (docs/SWITCH-deko3d.md; bd_switch_backend picks one at start).
+DEKO3D="${DEKO3D:-1}"
+if [ "$DEKO3D" = 1 ]; then
+    [ -f out/switch-host/deko3d_shaders.cpp ] || die "out/switch-host/deko3d_shaders.cpp missing: run the host stage with DEKO3D=1"
+fi
+if { [ "$GPUTEST" = 1 ] || [ "$DEKO3D" = 1 ]; } && [ ! -f "$DEVKITPRO/libnx/lib/libdeko3d.a" ]; then
+    log "Installing devkitPro's deko3d"
     (dkp-pacman -Sy --noconfirm deko3d || pacman -Sy --noconfirm deko3d) >/dev/null 2>&1 || true
     [ -f "$DEVKITPRO/libnx/lib/libdeko3d.a" ] || die "deko3d is not in this image and could not be installed (dkp-pacman -S deko3d)"
 fi
@@ -67,7 +72,8 @@ cmake -S . -B "$build" -G Ninja \
     -DDEVKITPRO="$DEVKITPRO" \
     -DREXGLUE_SWITCH_NVK_SDK="$NVK_SDK" \
     -DREBLUE_SWITCH_LTO="$([ "$LTO" = 1 ] && echo ON || echo OFF)" \
-    -DREBLUE_SWITCH_GPUTEST="$([ "$GPUTEST" = 1 ] && echo ON || echo OFF)"
+    -DREBLUE_SWITCH_GPUTEST="$([ "$GPUTEST" = 1 ] && echo ON || echo OFF)" \
+    -DREBLUE_SWITCH_DEKO3D="$([ "$DEKO3D" = 1 ] && echo ON || echo OFF)"
 
 log "Build ($JOBS jobs)"
 # -k 0: keep going after a failure so one run reports every failing file.

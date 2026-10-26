@@ -12,7 +12,7 @@
 uint g_SpecConstants() { return 0u; }
 #endif
 
-#ifdef __spirv__
+#if defined(__spirv__) && !defined(REBLUE_UBO_CONSTANTS) // device addresses; else the cbuffers (D3D12, uniform buffers)
 
 #define ScreenTexture_Texture2DDescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 0)
 #define ScreenTexture_Texture3DDescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 64)
@@ -81,71 +81,72 @@ uint g_SpecConstants() { return 0u; }
 
 #else
 
-cbuffer SharedConstants : register(b2, space4)
+REBLUE_CBUFFER_BINDING(2) cbuffer SharedConstants : register(b2, space4)
 {
+	// In offset order: SPIR-V wants a block's members by increasing offset.
 	uint ScreenTexture_Texture2DDescriptorIndex : packoffset(c0.x);
-	uint ScreenTexture_Texture3DDescriptorIndex : packoffset(c4.x);
-	uint ScreenTexture_TextureCubeDescriptorIndex : packoffset(c8.x);
-	uint ScreenTexture_SamplerDescriptorIndex : packoffset(c12.x);
 	uint s1_Texture2DDescriptorIndex : packoffset(c0.y);
-	uint s1_Texture3DDescriptorIndex : packoffset(c4.y);
-	uint s1_TextureCubeDescriptorIndex : packoffset(c8.y);
-	uint s1_SamplerDescriptorIndex : packoffset(c12.y);
 	uint s2_Texture2DDescriptorIndex : packoffset(c0.z);
-	uint s2_Texture3DDescriptorIndex : packoffset(c4.z);
-	uint s2_TextureCubeDescriptorIndex : packoffset(c8.z);
-	uint s2_SamplerDescriptorIndex : packoffset(c12.z);
 	uint s3_Texture2DDescriptorIndex : packoffset(c0.w);
-	uint s3_Texture3DDescriptorIndex : packoffset(c4.w);
-	uint s3_TextureCubeDescriptorIndex : packoffset(c8.w);
-	uint s3_SamplerDescriptorIndex : packoffset(c12.w);
 	uint s4_Texture2DDescriptorIndex : packoffset(c1.x);
-	uint s4_Texture3DDescriptorIndex : packoffset(c5.x);
-	uint s4_TextureCubeDescriptorIndex : packoffset(c9.x);
-	uint s4_SamplerDescriptorIndex : packoffset(c13.x);
 	uint s5_Texture2DDescriptorIndex : packoffset(c1.y);
-	uint s5_Texture3DDescriptorIndex : packoffset(c5.y);
-	uint s5_TextureCubeDescriptorIndex : packoffset(c9.y);
-	uint s5_SamplerDescriptorIndex : packoffset(c13.y);
 	uint s6_Texture2DDescriptorIndex : packoffset(c1.z);
-	uint s6_Texture3DDescriptorIndex : packoffset(c5.z);
-	uint s6_TextureCubeDescriptorIndex : packoffset(c9.z);
-	uint s6_SamplerDescriptorIndex : packoffset(c13.z);
 	uint s7_Texture2DDescriptorIndex : packoffset(c1.w);
-	uint s7_Texture3DDescriptorIndex : packoffset(c5.w);
-	uint s7_TextureCubeDescriptorIndex : packoffset(c9.w);
-	uint s7_SamplerDescriptorIndex : packoffset(c13.w);
 	uint s8_Texture2DDescriptorIndex : packoffset(c2.x);
-	uint s8_Texture3DDescriptorIndex : packoffset(c6.x);
-	uint s8_TextureCubeDescriptorIndex : packoffset(c10.x);
-	uint s8_SamplerDescriptorIndex : packoffset(c14.x);
 	uint s9_Texture2DDescriptorIndex : packoffset(c2.y);
-	uint s9_Texture3DDescriptorIndex : packoffset(c6.y);
-	uint s9_TextureCubeDescriptorIndex : packoffset(c10.y);
-	uint s9_SamplerDescriptorIndex : packoffset(c14.y);
 	uint s10_Texture2DDescriptorIndex : packoffset(c2.z);
-	uint s10_Texture3DDescriptorIndex : packoffset(c6.z);
-	uint s10_TextureCubeDescriptorIndex : packoffset(c10.z);
-	uint s10_SamplerDescriptorIndex : packoffset(c14.z);
 	uint s11_Texture2DDescriptorIndex : packoffset(c2.w);
-	uint s11_Texture3DDescriptorIndex : packoffset(c6.w);
-	uint s11_TextureCubeDescriptorIndex : packoffset(c10.w);
-	uint s11_SamplerDescriptorIndex : packoffset(c14.w);
 	uint s12_Texture2DDescriptorIndex : packoffset(c3.x);
-	uint s12_Texture3DDescriptorIndex : packoffset(c7.x);
-	uint s12_TextureCubeDescriptorIndex : packoffset(c11.x);
-	uint s12_SamplerDescriptorIndex : packoffset(c15.x);
 	uint s13_Texture2DDescriptorIndex : packoffset(c3.y);
-	uint s13_Texture3DDescriptorIndex : packoffset(c7.y);
-	uint s13_TextureCubeDescriptorIndex : packoffset(c11.y);
-	uint s13_SamplerDescriptorIndex : packoffset(c15.y);
 	uint s14_Texture2DDescriptorIndex : packoffset(c3.z);
-	uint s14_Texture3DDescriptorIndex : packoffset(c7.z);
-	uint s14_TextureCubeDescriptorIndex : packoffset(c11.z);
-	uint s14_SamplerDescriptorIndex : packoffset(c15.z);
 	uint s15_Texture2DDescriptorIndex : packoffset(c3.w);
+	uint ScreenTexture_Texture3DDescriptorIndex : packoffset(c4.x);
+	uint s1_Texture3DDescriptorIndex : packoffset(c4.y);
+	uint s2_Texture3DDescriptorIndex : packoffset(c4.z);
+	uint s3_Texture3DDescriptorIndex : packoffset(c4.w);
+	uint s4_Texture3DDescriptorIndex : packoffset(c5.x);
+	uint s5_Texture3DDescriptorIndex : packoffset(c5.y);
+	uint s6_Texture3DDescriptorIndex : packoffset(c5.z);
+	uint s7_Texture3DDescriptorIndex : packoffset(c5.w);
+	uint s8_Texture3DDescriptorIndex : packoffset(c6.x);
+	uint s9_Texture3DDescriptorIndex : packoffset(c6.y);
+	uint s10_Texture3DDescriptorIndex : packoffset(c6.z);
+	uint s11_Texture3DDescriptorIndex : packoffset(c6.w);
+	uint s12_Texture3DDescriptorIndex : packoffset(c7.x);
+	uint s13_Texture3DDescriptorIndex : packoffset(c7.y);
+	uint s14_Texture3DDescriptorIndex : packoffset(c7.z);
 	uint s15_Texture3DDescriptorIndex : packoffset(c7.w);
+	uint ScreenTexture_TextureCubeDescriptorIndex : packoffset(c8.x);
+	uint s1_TextureCubeDescriptorIndex : packoffset(c8.y);
+	uint s2_TextureCubeDescriptorIndex : packoffset(c8.z);
+	uint s3_TextureCubeDescriptorIndex : packoffset(c8.w);
+	uint s4_TextureCubeDescriptorIndex : packoffset(c9.x);
+	uint s5_TextureCubeDescriptorIndex : packoffset(c9.y);
+	uint s6_TextureCubeDescriptorIndex : packoffset(c9.z);
+	uint s7_TextureCubeDescriptorIndex : packoffset(c9.w);
+	uint s8_TextureCubeDescriptorIndex : packoffset(c10.x);
+	uint s9_TextureCubeDescriptorIndex : packoffset(c10.y);
+	uint s10_TextureCubeDescriptorIndex : packoffset(c10.z);
+	uint s11_TextureCubeDescriptorIndex : packoffset(c10.w);
+	uint s12_TextureCubeDescriptorIndex : packoffset(c11.x);
+	uint s13_TextureCubeDescriptorIndex : packoffset(c11.y);
+	uint s14_TextureCubeDescriptorIndex : packoffset(c11.z);
 	uint s15_TextureCubeDescriptorIndex : packoffset(c11.w);
+	uint ScreenTexture_SamplerDescriptorIndex : packoffset(c12.x);
+	uint s1_SamplerDescriptorIndex : packoffset(c12.y);
+	uint s2_SamplerDescriptorIndex : packoffset(c12.z);
+	uint s3_SamplerDescriptorIndex : packoffset(c12.w);
+	uint s4_SamplerDescriptorIndex : packoffset(c13.x);
+	uint s5_SamplerDescriptorIndex : packoffset(c13.y);
+	uint s6_SamplerDescriptorIndex : packoffset(c13.z);
+	uint s7_SamplerDescriptorIndex : packoffset(c13.w);
+	uint s8_SamplerDescriptorIndex : packoffset(c14.x);
+	uint s9_SamplerDescriptorIndex : packoffset(c14.y);
+	uint s10_SamplerDescriptorIndex : packoffset(c14.z);
+	uint s11_SamplerDescriptorIndex : packoffset(c14.w);
+	uint s12_SamplerDescriptorIndex : packoffset(c15.x);
+	uint s13_SamplerDescriptorIndex : packoffset(c15.y);
+	uint s14_SamplerDescriptorIndex : packoffset(c15.z);
 	uint s15_SamplerDescriptorIndex : packoffset(c15.w);
 	DEFINE_SHARED_CONSTANTS();
 };

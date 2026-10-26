@@ -22,7 +22,9 @@ param(
     # Plain calls between recompiled functions (undoes tools/switch/direct_calls.py).
     [switch]$NoDirectCalls,
     # Also the GPU test NRO (tools/switch/gputest, docs/SWITCH-deko3d.md P0.4).
-    [switch]$GpuTest
+    [switch]$GpuTest,
+    # Leave the deko3d back end out (NVK only). With it, bd_switch_backend picks deko3d or nvk at start.
+    [switch]$NoDeko3d
 )
 # Continue, not Stop: Windows PowerShell 5.1 turns a native program's redirected
 # stderr line into a terminating error. Every docker call checks its exit code.
@@ -80,6 +82,7 @@ if ($Clean) { $envArgs += @("-e", "CLEAN=1") }
 if ($Lto) { $envArgs += @("-e", "LTO=1") }
 if ($NoDirectCalls) { $envArgs += @("-e", "DIRECT_CALLS=0") }
 if ($GpuTest) { $envArgs += @("-e", "GPUTEST=1") }
+if ($NoDeko3d) { $envArgs += @("-e", "DEKO3D=0") } else { $envArgs += @("-e", "DEKO3D=1") }
 
 # ---------------------------------------------------------------- stages
 Write-Host ""

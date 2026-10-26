@@ -83,8 +83,8 @@ u32 FindEmptyHcgSlot(u32 base, u32 end) {
 }
 
 bd::gpu::GuestShader *
-GetOrCreateBlitShader(bd::gpu::ResourceType type, const void *blob,
-                             size_t blob_size,
+GetOrCreateBlitShader(bd::gpu::ResourceType type, const char *name,
+                             const void *blob, size_t blob_size,
                              bd::gpu::GuestShader **cache_slot) {
   if (*cache_slot)
     return *cache_slot;
@@ -94,8 +94,7 @@ GetOrCreateBlitShader(bd::gpu::ResourceType type, const void *blob,
     return nullptr;
   }
   auto *shader = bd::gpu::HostResourceHeap::Alloc<bd::gpu::GuestShader>(type);
-  shader->shader =
-      device->createShader(blob, blob_size, "main", bd::gpu::kHostShaderFormat);
+  shader->shader = bd::gpu::CreateHostShader(device, name, blob, blob_size);
   if (!shader->shader) {
     BD_ERROR("hcg*ShaderCreateByHlsl_hook: createShader failed (type={})",
              static_cast<u32>(type));
@@ -106,12 +105,13 @@ GetOrCreateBlitShader(bd::gpu::ResourceType type, const void *blob,
   return shader;
 }
 
-u32 HcgCreateByHlslImpl(bd::gpu::ResourceType type, const void *blob,
+u32 HcgCreateByHlslImpl(bd::gpu::ResourceType type, const char *name,
+                        const void *blob,
                         size_t blob_size, bd::gpu::GuestShader **cache_slot,
                         u32 table_base, u32 table_end) {
   std::lock_guard lock(g_blitShaderMutex);
   auto *shader =
-      GetOrCreateBlitShader(type, blob, blob_size, cache_slot);
+      GetOrCreateBlitShader(type, name, blob, blob_size, cache_slot);
   if (!shader)
     return 0;
   const u32 slot_va = FindEmptyHcgSlot(table_base, table_end);
@@ -127,14 +127,14 @@ u32 HcgCreateByHlslImpl(bd::gpu::ResourceType type, const void *blob,
 
 u32 hcgVertexShaderCreateByHlsl_hook() {
   const u32 slot = HcgCreateByHlslImpl(
-      bd::gpu::ResourceType::VertexShader, REBLUE_SHADER_BLOB(bd_2d_blit_vs),
+      bd::gpu::ResourceType::VertexShader, "bd_2d_blit_vs", REBLUE_SHADER_BLOB(bd_2d_blit_vs),
       &g_blitVs, kHcgVSTableBase, kHcgVSTableEnd);
   return slot;
 }
 
 u32 hcgPixelShaderCreateByHlsl_hook() {
   const u32 slot = HcgCreateByHlslImpl(
-      bd::gpu::ResourceType::PixelShader, REBLUE_SHADER_BLOB(bd_2d_blit_ps),
+      bd::gpu::ResourceType::PixelShader, "bd_2d_blit_ps", REBLUE_SHADER_BLOB(bd_2d_blit_ps),
       &g_blitPs, kHcgPSTableBase, kHcgPSTableEnd);
   return slot;
 }

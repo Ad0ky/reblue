@@ -247,6 +247,10 @@ bool CheckDeviceRemoved(const char *context);
 // dialog before the process terminates.
 bool DeviceIsLost();
 
+// The Switch's deko3d back end is in use (bd_switch_backend, read at start;
+// only builds with REBLUE_SWITCH_DEKO3D have it). False on every other build.
+bool UsingDeko3D();
+
 // Split by rewrite frequency because both single-heap choices hit a vendor
 // floor on discrete AMD: GPU_UPLOAD makes the per-unlock CPU byte swap
 // catastrophically slow, UPLOAD makes the GPU re-read every fetch over PCIe.

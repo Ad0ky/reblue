@@ -13,9 +13,11 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <format>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
 
@@ -37,6 +39,7 @@
 #include "core/memory_helpers.h"
 #include "core/settings.h"
 #include "core/shutdown.h"
+#include "gpu/backend.h"
 #include "gpu/bindless_allocator.h"
 #include "gpu/constant_buffers.h"
 #include "gpu/dred.h"
@@ -49,6 +52,19 @@
 #include "gpu/settings.h"
 #include "gpu/surface_registry.h"
 #include "platform/platform.h"
+#if defined(PLUME_DEKO3D)
+#include <plume_deko3d.h>
+
+#include "gpu/shaders/deko3d_shaders.h"
+#endif
+
+#if defined(PLUME_DEKO3D)
+REXCVAR_DEFINE_STRING(bd_switch_backend, "deko3d", "Switch",
+                      "The GPU back end: deko3d (Nintendo's API, through plume's "
+                      "deko3d back end) or nvk (Mesa's Vulkan driver). Read at "
+                      "start.")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+#endif
 
 namespace plume {
 #if defined(REBLUE_D3D12)
@@ -59,6 +75,62 @@ extern std::unique_ptr<RenderInterface> CreateVulkanInterface();
 } // namespace plume
 
 namespace bd::gpu {
+
+bool UsingDeko3D() {
+#if defined(PLUME_DEKO3D)
+  static const bool on = [] {
+    const std::string name(REXCVAR_GET(bd_switch_backend));
+    const bool deko = name != "nvk";
+    std::fprintf(stderr, "[gpu] back end: %s (bd_switch_backend=%s)\n",
+                 deko ? "deko3d" : "nvk", name.c_str());
+    return deko;
+  }();
+  return on;
+#else
+  return false;
+#endif
+}
+
+std::unique_ptr<plume::RenderShader> CreateHostShader(plume::RenderDevice *device,
+                                                      const char *name,
+                                                      const void *blob,
+                                                      size_t size) {
+  if (!device)
+    return nullptr;
+#if defined(PLUME_DEKO3D)
+  if (UsingDeko3D()) {
+    const void *data = nullptr;
+    size_t dsize = 0;
+    if (!Deko3DHostShaderBlob(name, data, dsize)) {
+      BD_ERROR("deko3d: no shader '{}' in the deko3d shader pack", name);
+      return nullptr;
+    }
+    return device->createShader(data, dsize, "main",
+                                plume::RenderShaderFormat::DEKO3D);
+  }
+#endif
+  (void)name;
+  return device->createShader(blob, size, "main", kHostShaderFormat);
+}
+
+namespace {
+// The deko3d back end's "creation failed" markers (only called when UsingDeko3D()).
+#if defined(PLUME_DEKO3D)
+bool DkBufferNull(plume::RenderBuffer *b) {
+  return static_cast<plume::Deko3DBuffer *>(b)->block == nullptr;
+}
+bool DkTextureNull(plume::RenderTexture *t) {
+  return !static_cast<plume::Deko3DTexture *>(t)->valid;
+}
+bool DkPipelineNull(plume::RenderPipeline *p) {
+  return !static_cast<plume::Deko3DGraphicsPipeline *>(p)->valid;
+}
+#else
+bool DkBufferNull(plume::RenderBuffer *) { return true; }
+bool DkTextureNull(plume::RenderTexture *) { return true; }
+bool DkPipelineNull(plume::RenderPipeline *) { return true; }
+#endif
+} // namespace
 
 namespace {
 
@@ -236,6 +308,8 @@ std::string DescribeBackend(plume::RenderDevice *device) {
   }
   return "D3D12";
 #else
+  if (UsingDeko3D())
+    return "deko3d";
   auto *dev = static_cast<plume::VulkanDevice *>(device);
   if (!dev)
     return "Vulkan";
@@ -331,9 +405,16 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
     // D3D12Core.dll that ends up owning the device.
     const bool dred_armed = EnableDred();
 #else
-    s.render_iface = plume::CreateVulkanInterface();
+#if defined(PLUME_DEKO3D)
+    if (UsingDeko3D()) {
+      plume::SetDeko3DLogCallback(
+          [](const char *message) { BD_INFO("[deko3d] {}", message); });
+      s.render_iface = plume::CreateDeko3DInterface();
+    } else
+#endif
+      s.render_iface = plume::CreateVulkanInterface();
     if (!s.render_iface) {
-      BD_ERROR("Plume CreateVulkanInterface failed");
+      BD_ERROR("Plume render interface creation failed");
       return false;
     }
 #endif
@@ -400,7 +481,7 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
     // plume's VulkanSwapChain defers VkSwapchain creation to resize(), so a
     // fresh swapchain is always empty until the first resize. The D3D12 backend
     // creates its swapchain in the constructor, so this stays Vulkan-only.
-    if (s.swap_chain) {
+    if (s.swap_chain && (!UsingDeko3D() || s.swap_chain->isEmpty())) {
       s.swap_chain->resize();
     }
 #endif
@@ -772,7 +853,9 @@ CreateHostBuffer(plume::RenderDevice *device,
 #if defined(REBLUE_D3D12)
       || static_cast<plume::D3D12Buffer *>(buffer.get())->d3d == nullptr
 #else
-      || static_cast<plume::VulkanBuffer *>(buffer.get())->vk == VK_NULL_HANDLE
+      || (UsingDeko3D() ? DkBufferNull(buffer.get())
+                        : static_cast<plume::VulkanBuffer *>(buffer.get())->vk ==
+                              VK_NULL_HANDLE)
 #endif
   ) {
     BD_ERROR(
@@ -799,8 +882,10 @@ CreateHostTexture(plume::RenderDevice *device,
 #if defined(REBLUE_D3D12)
       || static_cast<plume::D3D12Texture *>(texture.get())->d3d == nullptr
 #else
-      ||
-      static_cast<plume::VulkanTexture *>(texture.get())->vk == VK_NULL_HANDLE
+      || (UsingDeko3D()
+              ? DkTextureNull(texture.get())
+              : static_cast<plume::VulkanTexture *>(texture.get())->vk ==
+                    VK_NULL_HANDLE)
 #endif
   ) {
     BD_ERROR(
@@ -830,8 +915,10 @@ CreateHostGraphicsPipeline(plume::RenderDevice *device,
       || static_cast<plume::D3D12GraphicsPipeline *>(pipeline.get())->d3d ==
              nullptr
 #else
-      || static_cast<plume::VulkanGraphicsPipeline *>(pipeline.get())->vk ==
-             VK_NULL_HANDLE
+      || (UsingDeko3D()
+              ? DkPipelineNull(pipeline.get())
+              : static_cast<plume::VulkanGraphicsPipeline *>(pipeline.get())
+                        ->vk == VK_NULL_HANDLE)
 #endif
   ) {
     BD_ERROR("CreateHostGraphicsPipeline({}) failed: backend pipeline null",
@@ -887,6 +974,13 @@ Video::VideoMemory Video::MemoryUsage() {
   }
   adapter->Release();
 #else
+#if defined(PLUME_DEKO3D)
+  if (UsingDeko3D()) {
+    const auto &st = plume::GetDeko3DStats();
+    m.used = st.imageBytes.load() + st.bufferBytes.load() + st.codeBytes.load();
+    return m;
+  }
+#endif
   auto *dev = static_cast<plume::VulkanDevice *>(device);
   if (!dev->allocator)
     return m;

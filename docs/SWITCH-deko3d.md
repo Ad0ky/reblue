@@ -60,6 +60,26 @@ Still to do:
    3% either way, `bd_pe_ps_dof` 1.09x. uam's shaders are not slower than NAK's for this game.
 5. The shader cache: the DKSH are made from the player's game, so they stay out of the repository like `generated/`.
 
+## Status (2026-10-26): first build with deko3d
+
+The NRO carries both back ends; `bd_switch_backend` in the config picks one at start: `deko3d` (the default) or
+`nvk`. `run-switch-build.bat` builds deko3d in (`-NoDeko3d` leaves it out). What is in:
+
+- `thirdparty/plume`: banjo-nx's `plume_deko3d*.{h,cpp}` (in `tools/switch/patches/plume-switch.patch`), with
+  `RenderShaderFormat::DEKO3D` and the few interface additions it uses; `thirdparty/uam` from sa2-nx (WWHD's
+  patches), linked as one object with its Mesa symbols local (`plume_uam_localize.cmake`) so it lives beside NVK's
+  Mesa.
+- Shaders: the host stage (`DEKO3D=1`, the default) runs `tools/switch/deko3d/make_dk_shaders.py`: the 141 game
+  shaders from XenosRecomp's HLSL dump and re:Blue's 17 own shaders, DXC (uniform-buffer form, no
+  `-fvk-invert-y`), SPIRV-Cross, `spv_to_dk_glsl.py`, into `out/switch-host/deko3d_shaders.cpp` (GLSL, zlib, about
+  0.5 MB in the NRO). uam compiles a variant on the console the first time a pipeline needs it; the DKSH go to
+  `cache/deko3d_shaders_<uam flags>.bin` on the card, so the second run has them.
+- Runtime: `UsingDeko3D()` / `CreateHostShader()` (`gpu/device.cpp`, `gpu/backend.h`); guest shaders from the pack by
+  their cache hash (`gpu/shaders/guest_shaders.cpp`); constants always through uniform buffers (set 5); device lost
+  from `dkQueueIsInErrorState`; plume's messages in the log as `[deko3d]`.
+
+If it fails on the console, `bd_switch_backend = "nvk"` gives the NVK renderer back without another build.
+
 ## P1: device and presentation
 
 - banjo-nx's plume deko3d back end into `thirdparty/plume` (it already has `setGraphicsDescriptorSetDynamic`, as

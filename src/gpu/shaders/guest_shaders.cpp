@@ -21,6 +21,9 @@
 
 #include "core/logging.h"
 #include "gpu/backend.h"
+#if defined(PLUME_DEKO3D)
+#include "gpu/shaders/deko3d_shaders.h"
+#endif
 #include "gpu/host_resource_heap.h"
 #include "gpu/pipeline/pso_recorder.h"
 #include "gpu/constant_buffers.h"
@@ -163,13 +166,16 @@ const u8 *SpirvCache() {
 // mask (wc01 authors BLOOM BriMulti=50 -> exports ~59) and the blur spreads it
 // into giant white blobs. These two masks are substituted by copies whose
 // export is clamped to [0,1].
-bool BloomMaskClampBlob(u64 hash, const void *&blob, size_t &size) {
+bool BloomMaskClampBlob(u64 hash, const char *&name, const void *&blob,
+                        size_t &size) {
   switch (hash) {
   case 0xFFDBD782126EB6E8ull: // bd_pe_ps_brightpass
+    name = "bd_pe_ps_brightpass_clamp";
     blob = REBLUE_BLOB_SYMBOL(bd_pe_ps_brightpass_clamp);
     size = sizeof(REBLUE_BLOB_SYMBOL(bd_pe_ps_brightpass_clamp));
     return true;
   case 0xD386EA2FABF16CE9ull: // bd_pe_ps_ms_bright
+    name = "bd_pe_ps_ms_bright_clamp";
     blob = REBLUE_BLOB_SYMBOL(bd_pe_ps_ms_bright_clamp);
     size = sizeof(REBLUE_BLOB_SYMBOL(bd_pe_ps_ms_bright_clamp));
     return true;
@@ -226,12 +232,31 @@ plume::RenderShader *GetOrLinkShader(GuestShader *gs, u32 specConstants) {
   if (!device)
     return nullptr;
 
+  const char *clampName = nullptr;
   const void *clampBlob = nullptr;
   size_t clampSize = 0;
-  if (BloomMaskClampBlob(entry->hash, clampBlob, clampSize)) {
-    return PublishShader(gs, device->createShader(clampBlob, clampSize, "main",
-                                                  kHostShaderFormat));
+  if (BloomMaskClampBlob(entry->hash, clampName, clampBlob, clampSize)) {
+    return PublishShader(
+        gs, CreateHostShader(device, clampName, clampBlob, clampSize));
   }
+
+#if defined(PLUME_DEKO3D)
+  if (UsingDeko3D()) {
+    // The deko3d pack's GLSL (spec constants stay #defines the back end sets
+    // per pipeline), compiled by uam when a pipeline first needs it.
+    (void)specConstants;
+    const void *data = nullptr;
+    size_t size = 0;
+    if (!Deko3DGameShaderBlob(entry->hash, data, size)) {
+      BD_ERROR("deko3d: shader 0x{:016X} not in the deko3d shader pack",
+               entry->hash);
+      return nullptr;
+    }
+    return PublishShader(gs, device->createShader(
+                                 data, size, "main",
+                                 plume::RenderShaderFormat::DEKO3D));
+  }
+#endif
 
 #if !defined(REBLUE_D3D12)
   // Vulkan: one decoded SPIR-V module serves every spec constant value. The
