@@ -55,6 +55,11 @@
 #include "rex/ui/switch_saltynx.h"
 #include "rex/ui/switch_sysclk.h"
 
+// libnx's sbrk bounds: the malloc heap. Declared here, at file scope: inside the anonymous namespace GCC
+// gives them that namespace (the link looks for (anonymous namespace)::fake_heap_start).
+extern "C" char* fake_heap_start;
+extern "C" char* fake_heap_end;
+
 extern "C" {
 void _start(void);
 /* rexglue log folder, ending in '/' (switch_crash_hooks.c). */
@@ -241,8 +246,6 @@ extern "C" void RexSwitchPerfToggleAb(void) {
  * view), so that limit is the real ceiling, not free memory. When it runs out,
  * even committing 4 KB fails with 2001-0103 (resource exhausted).
  */
-extern "C" char* fake_heap_start;  // libnx's sbrk bounds: the malloc heap
-extern "C" char* fake_heap_end;
 
 /*
  * The malloc heap: what is in use and how big it can get. InfoType_UsedMemorySize counts the whole
