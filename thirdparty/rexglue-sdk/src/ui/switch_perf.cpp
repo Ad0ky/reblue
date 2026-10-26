@@ -60,6 +60,11 @@
 extern "C" char* fake_heap_start;
 extern "C" char* fake_heap_end;
 
+/* Files and folders the process has open on the card (each one an object in fs and, through Atmosphere's fs.mitm,
+ * in ams.mitm): the reports show how many, and the most at once, to see whether something keeps them open. */
+static std::atomic<int> g_ficheros_abiertos{0}, g_ficheros_max{0}, g_carpetas_abiertas{0};
+
+
 extern "C" {
 void _start(void);
 /* rexglue log folder, ending in '/' (switch_crash_hooks.c). */
@@ -82,6 +87,10 @@ Result __real_nvAddressSpaceAllocFixed(NvAddressSpace* a, bool sparse, u64 size,
 Result __real_nvioctlNvhostAsGpu_MapBufferEx(u32 fd, u32 flags, u32 kind, u32 nvmap_handle, u32 page_size,
                                              u64 buffer_offset, u64 mapping_size, u64 input_offset, u64* offset);
 void __real_armDCacheClean(void* addr, size_t size);
+Result __real_fsFsOpenFile(FsFileSystem* fs, const char* path, u32 mode, FsFile* out);
+void __real_fsFileClose(FsFile* f);
+Result __real_fsFsOpenDirectory(FsFileSystem* fs, const char* path, u32 mode, FsDir* out);
+void __real_fsDirClose(FsDir* d);
 Result __real_nwindowQueueBuffer(NWindow* nw, s32 slot, const NvMultiFence* fence);
 Result __real_bqDequeueBuffer(Binder* b, bool async, u32 width, u32 height, s32 format, u32 usage, s32* buf,
                               NvMultiFence* fence);
@@ -414,6 +423,7 @@ void ReportImpl(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCoun
                "fisica confirmada %.0f, vistas %.0f | invitado %zu/%zu MB (respaldo/mapeado) | "
                "limite de mapeo %llu/%llu MB, proceso %llu/%llu MB | "
                "malloc %llu MB en uso, %llu tomados de %llu, informes sin memoria %u | "
+               "ficheros abiertos %d (maximo %d), carpetas %d | "
                "muestras %zu | vigilancia: %s | samplers: %.0f nuevos/s, %.0f parones/s\n",
                seconds, mode, double(counters_now[0] - counters_last[0]) / seconds, total_cpu,
                double(counters_now[1] - counters_last[1]) / seconds,
@@ -424,7 +434,8 @@ void ReportImpl(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCoun
                double(counters_now[18] - counters_last[18]) / seconds,
                RexGmCommittedBytes() >> 20, RexGmMappedBytes() >> 20,
                (u64)lim_usado, (u64)lim_tope, (u64)proc_usado, (u64)proc_total,
-               (u64)malloc_uso, (u64)malloc_tomado, (u64)malloc_tope, g_reports_skipped, g_sample_count,
+               (u64)malloc_uso, (u64)malloc_tomado, (u64)malloc_tope, g_reports_skipped,
+               g_ficheros_abiertos.load(), g_ficheros_max.load(), g_carpetas_abiertas.load(), g_sample_count,
                 (RexGmModoProteccion() == 1   ? "permisos (paginas legibles)"
                  : RexGmModoProteccion() == 2 ? "desmapeo (cada lectura falla)"
                                               : "sin probar"),
@@ -1056,6 +1067,36 @@ Result __wrap_nvGpuChannelKickoff(NvGpuChannel* c) {
   const Result rc = __real_nvGpuChannelKickoff(c);
   Anotar(kKickoff, desde);
   return rc;
+}
+
+Result __wrap_fsFsOpenFile(FsFileSystem* fs, const char* path, u32 mode, FsFile* out) {
+  const Result rc = __real_fsFsOpenFile(fs, path, mode, out);
+  if (R_SUCCEEDED(rc)) {
+    const int n = g_ficheros_abiertos.fetch_add(1, std::memory_order_relaxed) + 1;
+    int m = g_ficheros_max.load(std::memory_order_relaxed);
+    while (n > m && !g_ficheros_max.compare_exchange_weak(m, n, std::memory_order_relaxed)) {
+    }
+  }
+  return rc;
+}
+
+void __wrap_fsFileClose(FsFile* f) {
+  if (f && serviceIsActive(&f->s))
+    g_ficheros_abiertos.fetch_sub(1, std::memory_order_relaxed);
+  __real_fsFileClose(f);
+}
+
+Result __wrap_fsFsOpenDirectory(FsFileSystem* fs, const char* path, u32 mode, FsDir* out) {
+  const Result rc = __real_fsFsOpenDirectory(fs, path, mode, out);
+  if (R_SUCCEEDED(rc))
+    g_carpetas_abiertas.fetch_add(1, std::memory_order_relaxed);
+  return rc;
+}
+
+void __wrap_fsDirClose(FsDir* d) {
+  if (d && serviceIsActive(&d->s))
+    g_carpetas_abiertas.fetch_sub(1, std::memory_order_relaxed);
+  __real_fsDirClose(d);
 }
 
 Result __wrap_nvMapCreate(NvMap* m, void* cpu_addr, u32 size, u32 align, NvKind kind, bool is_cpu_cacheable) {
