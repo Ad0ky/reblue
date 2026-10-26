@@ -93,6 +93,10 @@ each, so it was not reproduced. Changes after it:
   (`// reblue-spec0-mask=` in its text), so the keys are known in advance; two threads asking for one variant compile
   it once.
 - A uam compile that runs past 10 s is reported in the log and its GLSL written to `logs/uam_stuck_*.glsl`.
+- Second run: the field drew with long smeared triangles across the scene and 130-180 ms of GPU a frame (NVK: ~40).
+  plume's Vulkan back end turns primitive restart on for every strip pipeline; the deko3d back end never set it, so
+  the 0xFFFF restart indices of the game's strips were drawn as vertices. Now set on indexed strip draws.
+- A `[deko3d]` line every 10 s beside `[frames]`: draws, pipeline binds, barriers by kind, copies per frame.
 - XenosRecomp's HLSL dump named files by their source name, and `bd_cri_movie.vso` and `.pso` overwrote each other:
   the movie vertex shader (0x815DF1B3CCBFAA4E) was missing. The names now carry the hash.
 

@@ -18,6 +18,9 @@
 #include <thread>
 
 #include <plume_render_interface.h>
+#if defined(PLUME_DEKO3D)
+#include <plume_deko3d.h>
+#endif
 
 #include "gpu/gpu_profiling.h"
 
@@ -25,6 +28,7 @@
 #include "engine/engine.h"
 #include "gpu/backend.h"
 #include "gpu/constant_buffers.h"
+#include "gpu/device.h"
 #include "gpu/output.h"
 #include "gpu/pass_timer.h"
 #include "gpu/settings.h"
@@ -79,11 +83,37 @@ public:
               "33 ms {}, 50 ms {}, 100 ms {}",
               window_ms / 1000.0, n * 1000.0 / window_ms, total_ms_ / n, worst_ms_, fence_ms_ / n,
               (acquire_ms_ + present_ms_) / n, pace_ms_ / n, cpu, over_33_, over_50_, over_100_);
+#if defined(PLUME_DEKO3D)
+      if (UsingDeko3D())
+        ReportDeko3D(n);
+#endif
       frames_ = over_33_ = over_50_ = over_100_ = 0;
       total_ms_ = worst_ms_ = acquire_ms_ = present_ms_ = fence_ms_ = pace_ms_ = 0;
       window_ = now;
     }
   }
+
+#if defined(PLUME_DEKO3D)
+  // The deko3d back end's counters over the window, per frame: what the GPU is asked to wait for and copy.
+  void ReportDeko3D(double frames) {
+    const auto &st = plume::GetDeko3DStats();
+    const u64 now[] = {st.draws.load(), st.pipelineBinds.load(), st.barriersPrimitives.load(),
+                       st.barriersFragments.load(), st.barriersFull.load(), st.barriersImageInvalidate.load(),
+                       st.copyBuffer.load(), st.copyUpload.load(), st.copyImage.load(), st.copyReadback.load(),
+                       st.shaderCompiles.load(), st.shaderCacheHits.load()};
+    double d[std::size(now)];
+    for (size_t i = 0; i < std::size(now); ++i) {
+      d[i] = double(now[i] - dk_last_[i]);
+      dk_last_[i] = now[i];
+    }
+    BD_INFO("[deko3d] per frame: {:.0f} draws, {:.0f} pipeline binds | barriers: {:.1f} primitives, {:.1f} "
+            "fragments, {:.1f} full, {:.1f} texture cache drops | copies: {:.1f} buffer, {:.1f} uploads, {:.1f} "
+            "image, {:.1f} readbacks | in the window: {:.0f} uam compiles, {:.0f} DKSH cache hits",
+            d[0] / frames, d[1] / frames, d[2] / frames, d[3] / frames, d[4] / frames, d[5] / frames,
+            d[6] / frames, d[7] / frames, d[8] / frames, d[9] / frames, d[10], d[11]);
+  }
+  u64 dk_last_[12] = {};
+#endif
 
   static double Ms(Clock::time_point a, Clock::time_point b) {
     return std::chrono::duration<double, std::milli>(b - a).count();

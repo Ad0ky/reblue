@@ -2016,10 +2016,10 @@ index 0000000..5feb942
 +};
 diff --git a/plume_deko3d.h b/plume_deko3d.h
 new file mode 100644
-index 0000000..851c642
+index 0000000..d314610
 --- /dev/null
 +++ b/plume_deko3d.h
-@@ -0,0 +1,705 @@
+@@ -0,0 +1,708 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): plume's render interface on deko3d, the Switch's own GPU API, for
 +// Renut's renderer (docs/deko3d-renderer.md). MIT, as plume. deko3d is zlib (fincs, devkitPro); the shaders are compiled
@@ -2372,6 +2372,9 @@ index 0000000..851c642
 +        uint8_t computePush[256]{};
 +        uint32_t computePushSize = 0;
 +        DkIdxFormat indexFormat = DkIdxFormat_Uint16, boundIndexFormat = DkIdxFormat_Uint16;
++        // re:Blue (2026-10-26): the primitive restart state set on the queue (-1: unknown after begin), and its index.
++        int restartEnabled = -1;
++        uint32_t restartIndex = 0;
 +        uint32_t indexSize = 2;
 +        DkGpuAddr indexAddress = 0;
 +        bool descriptorsInvalidated = false;
@@ -2727,10 +2730,10 @@ index 0000000..851c642
 +};
 diff --git a/plume_deko3d_commands.cpp b/plume_deko3d_commands.cpp
 new file mode 100644
-index 0000000..9a42bb1
+index 0000000..d6773aa
 --- /dev/null
 +++ b/plume_deko3d_commands.cpp
-@@ -0,0 +1,1358 @@
+@@ -0,0 +1,1374 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): command lists, the queue and the swapchain (plume_deko3d.cpp has the
 +// device). docs/deko3d-renderer.md section 4 maps each plume call to deko3d.
@@ -2857,6 +2860,7 @@ index 0000000..9a42bb1
 +        viewportCount = scissorCount = 0;
 +        indexAddress = 0;
 +        boundIndexFormat = DkIdxFormat_Uint16;
++        restartEnabled = -1;
 +        boundTexCount[0] = boundTexCount[1] = boundTexCount[2] = 0;
 +        sharedBase = 0;
 +        sharedSize = 0;
@@ -3136,6 +3140,21 @@ index 0000000..9a42bb1
 +    void Deko3DCommandList::drawIndexedInstanced(uint32_t indexCount, uint32_t instanceCount, uint32_t startIndex, int32_t baseVertex, uint32_t startInstance) {
 +        if (!graphicsPipeline || !graphicsPipeline->valid || !indexAddress)
 +            return;
++        // re:Blue (2026-10-26): primitive restart on strips, at the index format's all-ones index (plume's Vulkan back
++        // end enables it for every strip pipeline; the Xbox 360's strips are full of 0xFFFF restarts). Without it a
++        // restart index is drawn as a vertex: long triangles across the scene, smeared textures, many times the fill.
++        {
++            const DkPrimitive prim = graphicsPipeline->primitive;
++            const int enable = (prim == DkPrimitive_TriangleStrip || prim == DkPrimitive_LineStrip) ? 1 : 0;
++            const uint32_t index = indexFormat == DkIdxFormat_Uint32 ? 0xFFFFFFFFu
++                                   : indexFormat == DkIdxFormat_Uint8 ? 0xFFu : 0xFFFFu;
++            if (enable != restartEnabled || (enable && index != restartIndex)) {
++                flushBarriers();
++                dkCmdBufSetPrimitiveRestart(cmd, enable != 0, index);
++                restartEnabled = enable;
++                restartIndex = index;
++            }
++        }
 +        flushDescriptorInvalidate();
 +        bindGraphicsBuffers();
 +        if (graphicsPipeline->boundTextures)
