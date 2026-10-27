@@ -33,3 +33,41 @@ bdLookupAndSetRenderTarget
 bdLookupRenderTarget
 bdMatrixSet
 bdMatrixSetTranslation
+# Second batch (2026-10-27 console profile, shadow distance 1.0): the next
+# hottest of the Draw Thread, and the Main Thread's (the Draw Thread waits
+# for it ~11% of the time).
+bdDrawRecordListReplay hooked
+sub_82276FA0
+sub_82490A10
+sub_82286BC0
+sub_8227FDC8
+sub_82286370
+sub_82425848
+sub_8227EFC8
+sub_82174270
+hcgVertexDeclarationSet
+sub_8228AB40
+bdShaderConstantFlush
+sub_82198138
+sub_8221DBE0
+sub_8218A8C8
+sub_82281D28
+bdSinCos
+CharaVO__BuildBoneMatrices
+bdAnimBoneEvaluate
+sub_82275C08
+sub_82189CD0
+sub_82277100
+sub_82422758
+bdAnimKeyframeSample
+sub_82422FC0
+sub_8217AE90
+bdSceneNodeUpdateCollision
+sub_822753E0
+sub_82491418
+sub_8272EB40
+bdMatrixSetRotation
+sub_824931B8
+sub_82422410
+sub_824906C8
+sub_8227CB10

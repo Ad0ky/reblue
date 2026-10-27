@@ -73,20 +73,29 @@ static unsigned long long HashRegs(const PPCContext &c) {
   auto add = [&](const void *p, size_t n) { const unsigned char *b = (const unsigned char *)p; for (size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 1099511628211ull; };
   const PPCRegister *r[] = {&c.r0,&c.r1,&c.r2,&c.r3,&c.r4,&c.r5,&c.r6,&c.r7,&c.r8,&c.r9,&c.r10,&c.r11,&c.r12,&c.r13};
   for (auto *x : r) add(&x->u64, 8);
+  // NaNs compare as one value: which operand's payload a NaN result carries
+  // depends on operand order, which the two compilations may choose
+  // differently for commutative operations; the game never reads a payload.
+  auto addf64 = [&](u64 v) { if ((v & 0x7FF0000000000000ull) == 0x7FF0000000000000ull && (v & 0xFFFFFFFFFFFFFull)) v = 0x7FF8000000000000ull; add(&v, 8); };
+  auto addv = [&](const PPCVRegister *x) { for (int k = 0; k < 4; ++k) { u32 w = x->u32[k]; if ((w & 0x7F800000u) == 0x7F800000u && (w & 0x7FFFFFu)) w = 0x7FC00000u; add(&w, 4); } };
   const PPCRegister *f[] = {&c.f0,&c.f1,&c.f2,&c.f3,&c.f4,&c.f5,&c.f6,&c.f7,&c.f8,&c.f9,&c.f10,&c.f11,&c.f12,&c.f13};
-  for (auto *x : f) add(&x->u64, 8);
-  for (const PPCVRegister *x : {VLIST128C}) add(x, 16);
+  for (auto *x : f) addf64(x->u64);
+  for (const PPCVRegister *x : {VLIST128C}) addv(x);
   return h;
 }
 static void DiffRegs(const PPCContext &a, const PPCContext &b) {
+  // (also used by Stub)
   const PPCRegister *ra[] = {&a.r0,&a.r1,&a.r2,&a.r3,&a.r4,&a.r5,&a.r6,&a.r7,&a.r8,&a.r9,&a.r10,&a.r11,&a.r12,&a.r13};
   const PPCRegister *rb[] = {&b.r0,&b.r1,&b.r2,&b.r3,&b.r4,&b.r5,&b.r6,&b.r7,&b.r8,&b.r9,&b.r10,&b.r11,&b.r12,&b.r13};
   for (int i = 0; i < 14; ++i) if (ra[i]->u64 != rb[i]->u64) std::printf("      r%d %016llx vs %016llx\n", i, (unsigned long long)ra[i]->u64, (unsigned long long)rb[i]->u64);
   const PPCRegister *fa[] = {&a.f0,&a.f1,&a.f2,&a.f3,&a.f4,&a.f5,&a.f6,&a.f7,&a.f8,&a.f9,&a.f10,&a.f11,&a.f12,&a.f13};
   const PPCRegister *fb[] = {&b.f0,&b.f1,&b.f2,&b.f3,&b.f4,&b.f5,&b.f6,&b.f7,&b.f8,&b.f9,&b.f10,&b.f11,&b.f12,&b.f13};
-  for (int i = 0; i < 14; ++i) if (fa[i]->u64 != fb[i]->u64) std::printf("      f%d %g vs %g\n", i, fa[i]->f64, fb[i]->f64);
+  for (int i = 0; i < 14; ++i) if (fa[i]->u64 != fb[i]->u64 && !(fa[i]->f64 != fa[i]->f64 && fb[i]->f64 != fb[i]->f64)) std::printf("      f%d %g vs %g\n", i, fa[i]->f64, fb[i]->f64);
   const PPCVRegister *va[] = {VLIST128A}, *vb[] = {VLIST128B};
-  for (int i = 0; i < 128; ++i) if (std::memcmp(va[i], vb[i], 16)) std::printf("      v%d differs\n", i);
+  for (int i = 0; i < 128; ++i) for (int k = 0; k < 4; ++k) {
+    const float x = va[i]->f32[k], y = vb[i]->f32[k];
+    if (va[i]->u32[k] != vb[i]->u32[k] && !(x != x && y != y)) { std::printf("      v%d[%d] %08x vs %08x\n", i, k, va[i]->u32[k], vb[i]->u32[k]); break; }
+  }
 }
 static void Scramble(PPCContext &c, unsigned id) {
   unsigned long long s = Mix(id * 7919ull + g_calls);
@@ -97,9 +106,24 @@ static void Scramble(PPCContext &c, unsigned id) {
   for (auto *x : f) { s = Mix(s); x->f64 = double(s % 1000) / 7.0; }
   for (PPCVRegister *x : {VLIST20}) for (int k = 0; k < 4; ++k) { s = Mix(s); x->f32[k] = float(s % 1000) / 3.0f; }
 }
+// The first run's register file at each call, and the second run checks
+// against it as it goes (printing the registers of the first difference).
+static PPCContext *g_snap;
+static int g_phase;  // 0 first run, 1 second run, 2 difference shown
+static void DiffRegs(const PPCContext &a, const PPCContext &b);
 static void Stub(PPCContext &ctx, unsigned id) {
   ++g_calls;
-  if (g_nrec < kCallLimitRec) g_rec[g_nrec++] = {id, HashRegs(ctx)};
+  if (g_nrec < kCallLimitRec) {
+    const unsigned long long h = HashRegs(ctx);
+    if (g_snap && g_phase == 0) g_snap[g_nrec] = ctx;
+    if (g_snap && g_phase == 1 && h != g_rec[g_nrec].hash) {
+      std::printf("    at call %u (callee %u):\n", g_nrec, id);
+      DiffRegs(g_snap[g_nrec], ctx);
+      g_phase = 2;
+    }
+    g_rec[g_nrec] = {id, h};
+    ++g_nrec;
+  }
   if (g_calls >= kCallLimit) longjmp(g_stop, 1);
   Scramble(ctx, id);
 }
@@ -192,10 +216,13 @@ static int RunPair(Fn o, Fn n, unsigned seed) {
   Seed(ca, ma, seed); Seed(cb, mb, seed);
   alarm(2);
   // the host mode each run starts in is the one its context says
+  if (!g_snap) g_snap = (PPCContext *)std::calloc(kCallLimitRec, sizeof(PPCContext));
+  g_phase = 0;
   g_nrec = g_calls = 0; ca.fpscr.setcsr(ca.fpscr.csr);
   if (!setjmp(g_stop)) o(ca, ma);
   static Rec ra[kCallLimitRec]; unsigned na = g_nrec; std::memcpy(ra, g_rec, sizeof(ra));
   if (g_only_original) return 0;
+  g_phase = 1;
   g_nrec = g_calls = 0; cb.fpscr.setcsr(cb.fpscr.csr);
   if (!setjmp(g_stop)) n(cb, mb);
   unsigned nb = g_nrec;
@@ -211,7 +238,18 @@ static int RunPair(Fn o, Fn n, unsigned seed) {
   mincore(ma, kMem, va); mincore(mb, kMem, vb);
   for (size_t p = 0; p < (kMem >> 12); ++p) if ((va[p] | vb[p]) & 1) {
     // a page only one version touched reads as its initial contents in the other
-    if (std::memcmp(ma + (p << 12), mb + (p << 12), 4096)) { std::printf("    guest page 0x%08zx differs\n", p << 12); bad = 1; break; }
+    if (std::memcmp(ma + (p << 12), mb + (p << 12), 4096)) {
+      for (u32 o = 0; o < 4096; o += 4) {
+        u32 x, y;
+        std::memcpy(&x, ma + (p << 12) + o, 4); std::memcpy(&y, mb + (p << 12) + o, 4);
+        x = __builtin_bswap32(x); y = __builtin_bswap32(y);
+        auto nan = [](u32 w) { return (w & 0x7F800000u) == 0x7F800000u && (w & 0x7FFFFFu); };
+        if (x != y && !(nan(x) && nan(y))) {
+          std::printf("    guest word 0x%08zx: %08x vs %08x\n", (p << 12) + o, x, y); bad = 1; break;
+        }
+      }
+      if (bad) break;
+    }
   }
   return bad;
 }
