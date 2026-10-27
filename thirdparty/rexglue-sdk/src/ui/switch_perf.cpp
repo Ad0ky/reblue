@@ -39,7 +39,9 @@
  * libraries, and the wrappers have to be defined before libnx.a enters the link.
  */
 
+#include <fcntl.h>
 #include <malloc.h>
+#include <unistd.h>
 #include <new>
 #include <algorithm>
 #include <atomic>
@@ -832,6 +834,109 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount], 
   }
 }
 
+/*
+ * Hang watch. The game froze hard at a load more than once and left nothing: the 10 s report stopped too,
+ * because it takes locks a stuck game may hold (malloc's, the guest memory table's). When no frame has
+ * been presented for kHangSeconds, this writes every thread's pc, lr and frame chain to rex_cuelgue.log
+ * without allocating or taking any lock of the game's: a file opened at start, snprintf of integers into a
+ * static buffer, write and fsync. Again every kHangRepeatSeconds while it lasts (a few times), so a slow
+ * load that ends is told apart from a deadlock (the same stacks every time).
+ */
+constexpr u64 kHangSeconds = 6;
+constexpr u64 kHangRepeatSeconds = 20;
+constexpr int kHangMaxDumps = 4;
+int g_hang_fd = -1;
+char g_hang_buf[1024];
+
+void HangWrite(const char* text, int len) {
+  if (g_hang_fd >= 0 && len > 0)
+    (void)!write(g_hang_fd, text, size_t(len < int(sizeof(g_hang_buf)) ? len : int(sizeof(g_hang_buf)) - 1));
+}
+
+void HangDump(u64 seconds_without_frames, int index) {
+  if (g_hang_fd < 0)
+    return;
+  int n = std::snprintf(g_hang_buf, sizeof(g_hang_buf),
+                        "==== cuelgue %d: %llu s sin presentar un fotograma (imagen 0x%016llx)\n", index,
+                        (unsigned long long)seconds_without_frames, (unsigned long long)g_base);
+  HangWrite(g_hang_buf, n);
+  for (size_t idx = 0; idx < kMaxThreads; ++idx) {
+    Slot& s = g_slots[idx];
+    const u32 h = s.handle.load();
+    if (!h)
+      continue;
+    if (R_FAILED(svcSetThreadActivity(h, ThreadActivity_Paused)))
+      continue;
+    ThreadContext ctx;
+    u64 frames[16] = {};
+    const bool ok = R_SUCCEEDED(svcGetThreadContext3(&ctx, h));
+    if (ok) {
+      MemoryInfo smi;
+      u32 spi = 0;
+      if (R_SUCCEEDED(svcQueryMemory(&smi, &spi, ctx.sp)) && (smi.perm & Perm_R)) {
+        const u64 lo = smi.addr, hi = smi.addr + smi.size;
+        u64 fp = ctx.fp;
+        for (size_t k = 0; k < 16 && fp >= lo && fp + 16 <= hi && (fp & 7) == 0; ++k) {
+          frames[k] = reinterpret_cast<const u64*>(fp)[1];
+          const u64 next = reinterpret_cast<const u64*>(fp)[0];
+          if (next <= fp)
+            break;
+          fp = next;
+        }
+      }
+    }
+    svcSetThreadActivity(h, ThreadActivity_Runnable);
+    char name[33];
+    std::memcpy(name, s.name, 32);
+    name[32] = 0;
+    if (!ok) {
+      n = std::snprintf(g_hang_buf, sizeof(g_hang_buf), "-- hilo \"%s\": sin contexto\n", name[0] ? name : "?");
+      HangWrite(g_hang_buf, n);
+      continue;
+    }
+    auto rel = [](u64 a) -> unsigned long long { return InText(a) ? (unsigned long long)(a - g_base) : (unsigned long long)a; };
+    auto tag = [](u64 a) -> const char* { return InText(a) ? "imagen+0x" : "0x"; };
+    n = std::snprintf(g_hang_buf, sizeof(g_hang_buf), "-- hilo \"%s\"%s: pc %s%llx lr %s%llx | pila", name[0] ? name : "?",
+                      AfterSvc(ctx.pc.x) ? " (esperando en el kernel)" : "", tag(ctx.pc.x), rel(ctx.pc.x), tag(ctx.lr),
+                      rel(ctx.lr));
+    for (size_t k = 0; k < 16 && frames[k] && n < int(sizeof(g_hang_buf)) - 40; ++k)
+      n += std::snprintf(g_hang_buf + n, sizeof(g_hang_buf) - size_t(n), " %s%llx", tag(frames[k]), rel(frames[k]));
+    if (n < int(sizeof(g_hang_buf)) - 2) {
+      g_hang_buf[n++] = '\n';
+      g_hang_buf[n] = 0;
+    }
+    HangWrite(g_hang_buf, n);
+  }
+  HangWrite("\n", 1);
+  fsync(g_hang_fd);
+}
+
+// Its own thread: the profiler's may itself be stuck in its report (malloc's lock) when the game hangs.
+Thread g_hang_thread;
+void HangWatchMain(void*) {
+  const u64 tick_freq = armGetSystemTickFreq();
+  __real_svcSleepThread(kStartDelayNs);
+  // Opened now: writing it later must not need the heap.
+  g_hang_fd = open((std::string(RexSwitchLogDir()) + "rex_cuelgue.log").c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  u64 frames = g_counters[0].load(std::memory_order_relaxed);
+  u64 since = armGetSystemTick(), last_dump = 0;
+  int dumps = 0;
+  while (true) {
+    __real_svcSleepThread(500000000ULL);
+    const u64 now = armGetSystemTick();
+    const u64 frames_now = g_counters[0].load(std::memory_order_relaxed);
+    if (frames_now != frames) {
+      frames = frames_now;
+      since = now;
+      dumps = 0;
+    } else if (now - since >= kHangSeconds * tick_freq && dumps < kHangMaxDumps &&
+               (dumps == 0 || now - last_dump >= kHangRepeatSeconds * tick_freq)) {
+      HangDump((now - since) / tick_freq, ++dumps);
+      last_dump = armGetSystemTick();
+    }
+  }
+}
+
 void ProfilerMain(void*) {
   const u64 tick_freq = armGetSystemTickFreq();
 
@@ -958,6 +1063,9 @@ __attribute__((constructor(102))) void StartProfiler() {
   if (R_SUCCEEDED(__real_threadCreate(&g_thread, ProfilerMain, nullptr, nullptr, 0x10000, 0x2A,
                                       -2))) {
     threadStart(&g_thread);
+  }
+  if (R_SUCCEEDED(__real_threadCreate(&g_hang_thread, HangWatchMain, nullptr, nullptr, 0x8000, 0x2A, -2))) {
+    threadStart(&g_hang_thread);
   }
 }
 
