@@ -193,6 +193,13 @@ What the build does already:
   footprint with four loads. `shadowCmp2D` (`xenosrecomp-switch.patch`,
   `shader_common.h`) reads it with one gather at the footprint's center, and
   falls back to the clamped loads only where the footprint leaves the map.
+- **Sun shadow map reuse.** `bd_shadow_update_interval` (default 2) draws the
+  sun shadow map every Nth frame and reuses it in between, with the light
+  matrix it was drawn with (`engine/shadow_cache.cpp`). The shadow pass is
+  about 3000 of the 4000 draws of a busy field frame. Static shadows stay put;
+  shadows of moving things trail by up to N-1 frames. A camera cut or a new
+  scene draws it at once. 1 draws it every frame. The game log gets a
+  `[shadow] sun map drawn .. reused ..` line every 10 s.
 - **Constant dirty marks.** `D3DDevice_Set*ShaderConstantF` marks the block
   dirty without the renderer lock once it is already dirty.
 - **Pipeline cache.** `cache/vulkan_pipelines.bin` beside the NRO keeps every
