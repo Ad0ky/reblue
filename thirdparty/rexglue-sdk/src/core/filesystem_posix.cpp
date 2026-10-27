@@ -23,6 +23,11 @@
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif
+#if defined(__SWITCH__)
+#include <algorithm>
+#include <memory>
+#include "guest_memory_switch.h"
+#endif
 
 #include <rex/assert.h>
 #include <rex/filesystem.h>
@@ -231,6 +236,44 @@ class PosixFileHandle : public FileHandle {
   }
   bool Read(size_t file_offset, void* buffer, size_t buffer_length,
             size_t* out_bytes_read) override {
+#if defined(__SWITCH__)
+    /*
+     * Reads into guest memory go through a heap buffer of our own. The guest window is process memory
+     * mapped from code memory, which FS refuses as an IPC buffer (0xD401), and libnx then falls back to
+     * fsdev_read_safe: 4 KB per request, and a loop that never ends when the read reaches the end of
+     * the file (fsFileRead succeeds with 0 bytes, len never shrinks). The game asked for more than was
+     * left of a file after the ev017 cutscene, and its main thread spun there for good: the "console
+     * freeze" (the log writer and the flight recorder then queued behind it on the SD card).
+     */
+    const uintptr_t b = reinterpret_cast<uintptr_t>(buffer);
+    const uintptr_t w = reinterpret_cast<uintptr_t>(RexGmBase());
+    if (w && b >= w && b < w + RexGmSize()) {
+      constexpr size_t kBounce = 1u << 20;
+      thread_local std::unique_ptr<uint8_t[]> bounce;
+      if (!bounce)
+        bounce.reset(new (std::nothrow) uint8_t[kBounce]);
+      if (bounce) {
+        size_t total = 0;
+        while (total < buffer_length) {
+          const size_t n = std::min(kBounce, buffer_length - total);
+          const ssize_t got = pread(handle_, bounce.get(), n, file_offset + total);
+          if (got < 0) {
+            if (total == 0) {
+              *out_bytes_read = 0;
+              return false;
+            }
+            break;
+          }
+          std::memcpy(static_cast<uint8_t*>(buffer) + total, bounce.get(), size_t(got));
+          total += size_t(got);
+          if (size_t(got) < n)
+            break;  // end of file
+        }
+        *out_bytes_read = total;
+        return true;
+      }
+    }
+#endif
     ssize_t out = pread(handle_, buffer, buffer_length, file_offset);
     if (out < 0) {
       *out_bytes_read = 0;
