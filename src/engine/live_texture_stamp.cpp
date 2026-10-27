@@ -16,6 +16,9 @@ namespace bd::engine {
 void LiveTextureStamp::Sync(
     const char *name, u32 generation,
     const std::function<std::vector<u8>()> &compose) {
+  const u64 version = gpu::NativeTextureNamesVersion();
+  if (seen_ && version == seen_version_ && generation == seen_generation_)
+    return;
   const std::vector<gpu::NativeTextureRef> refs =
       gpu::NativeTexturesByName(name);
 
@@ -42,6 +45,9 @@ void LiveTextureStamp::Sync(
     gpu::NativeTextureReplace(ref.va, blob.data(), blob.size());
     stamped_[ref.seq] = generation;
   }
+  seen_version_ = version;
+  seen_generation_ = generation;
+  seen_ = true;
 }
 
 } // namespace bd::engine

@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cstring>
 #include <memory>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -49,6 +50,7 @@ struct NamedNativeTexture {
 };
 std::unordered_map<u32, NamedNativeTexture> g_native_names;
 u64 g_native_name_seq = 0;
+std::atomic<u64> g_native_names_version{0};
 
 std::string NormalizeTextureName(std::string_view raw) {
   const size_t slash = raw.find_last_of("\\/");
@@ -473,9 +475,11 @@ GuestTexture *GetOrCreateNativeMirror(u32 guest_va, u32 name_va) {
   // the allocation registered, sequence included.
   if (name_va) {
     const char *name = bd::mem::str(name_va);
-    if (*name)
+    if (*name) {
       g_native_names[guest_va] = {NormalizeTextureName(name),
                                   ++g_native_name_seq};
+      g_native_names_version.fetch_add(1, std::memory_order_release);
+    }
   }
   return raw;
 }
@@ -573,7 +577,12 @@ void EvictNativeTexture(u32 guest_va) {
   g_pending_native_destroy[Video::RetireSlot("native mirror")].push_back(
       std::move(it->second));
   g_native_mirrors.erase(it);
-  g_native_names.erase(guest_va);
+  if (g_native_names.erase(guest_va))
+    g_native_names_version.fetch_add(1, std::memory_order_release);
+}
+
+u64 NativeTextureNamesVersion() {
+  return g_native_names_version.load(std::memory_order_acquire);
 }
 
 std::vector<NativeTextureRef> NativeTexturesByName(std::string_view name) {

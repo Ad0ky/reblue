@@ -33,6 +33,12 @@ private:
   // Keyed by the allocation's sequence number, so a freed-and-reused VA can
   // never pass for the instance that was stamped there before it.
   std::unordered_map<u64, u32> stamped_;
+  // The registry version and generation of the last complete Sync: the same
+  // pair again means nothing can have changed, so the tick does no lookup (the
+  // name scan ran every tick for each served texture: ~2% of the main thread).
+  u64 seen_version_ = 0;
+  u32 seen_generation_ = 0;
+  bool seen_ = false;
 };
 
 } // namespace bd::engine

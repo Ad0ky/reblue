@@ -49,6 +49,9 @@ struct NativeTextureRef {
 // request logs and the bare stem a preload names find the same entry. Guest
 // thread, like everything else here.
 std::vector<NativeTextureRef> NativeTexturesByName(std::string_view name);
+// Changes whenever a named native texture is registered or evicted: a caller that
+// saw the same value has nothing new to find by name (LiveTextureStamp).
+u64 NativeTextureNamesVersion();
 
 // Rewrites a live native texture's tiled payload from a whole blob file image
 // (the bdAllocRenderBuffer non-DDS layout) and rebuilds the host mirror, so
