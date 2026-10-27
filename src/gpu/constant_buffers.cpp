@@ -636,6 +636,12 @@ constexpr u8 kAlwaysPixel[] = {3, 21, 50, 53};
 struct DeltaDirty {
   std::atomic<u64> bits[4]{};
 };
+// Marks from the thread that draws (the setters run on it): plain words, no
+// atomic read-modify-write per draw (an exclusive-store loop each on the
+// Cortex-A57, ~1.6% of the Draw Thread). Marks from any other thread go to
+// g_delta_dirty, which a draw only takes apart when something is in it.
+u64 g_delta_local[2][4];
+thread_local bool t_delta_draw = false;
 DeltaDirty g_delta_dirty[2];
 // Registers the sampled check caught changing without a setter: checked on
 // every draw from then on, so a writer missing from the lists above costs at
@@ -658,7 +664,10 @@ void MarkConstantRegisters(ConstantBank bank, u32 start, u32 count) {
     const u32 lo = std::max(start, w * 64) - w * 64;
     const u32 hi = std::min(end, w * 64 + 64) - w * 64;
     const u64 mask = (hi - lo == 64) ? ~0ull : (((1ull << (hi - lo)) - 1) << lo);
-    d.bits[w].fetch_or(mask, std::memory_order_relaxed);
+    if (t_delta_draw)
+      g_delta_local[bank][w] |= mask;
+    else
+      d.bits[w].fetch_or(mask, std::memory_order_relaxed);
   }
 #else
   (void)bank;
@@ -687,6 +696,7 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
   // hold yet (after a new command list, or a shader reading further).
   u64 want[4];
   auto &dirty = g_delta_dirty[bank];
+  t_delta_draw = true;
   for (u32 w = 0; w < 4; ++w) {
     const u32 lo = w * 64;
     if (lo >= regs) {
@@ -696,8 +706,11 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
     const u64 inRange =
         regs - lo >= 64 ? ~0ull : ((1ull << (regs - lo)) - 1);
     // Bits past the shader's range stay set for a later shader that reads them.
-    want[w] = dirty.bits[w].fetch_and(~inRange, std::memory_order_relaxed) &
-              inRange;
+    want[w] = g_delta_local[bank][w] & inRange;
+    g_delta_local[bank][w] &= ~inRange;
+    if (dirty.bits[w].load(std::memory_order_relaxed) & inRange)
+      want[w] |= dirty.bits[w].fetch_and(~inRange, std::memory_order_relaxed) &
+                 inRange;
   }
   const u32 known = s.deltaValid[bank] / 16;
   for (u32 r = known; r < regs; ++r)
