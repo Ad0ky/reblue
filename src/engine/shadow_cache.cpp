@@ -26,70 +26,61 @@ REXCVAR_DEFINE_INT32(bd_shadow_update_interval, 2, "Graphics",
                      "shadows stay put; moving ones trail by up to N-1 "
                      "frames). 1 draws it every frame, as the game does.");
 
-// The sun shadow pass is a pair of render command objects in the scene's
-// command list (bdSceneSubmitRenderList walks it: type 2 nodes call the
-// object's vtable[1]). sub_82187168 opens the pass: it pushes a 1024x1024
-// depth surface, clears it, builds the camera view (bdBuildViewMatrix on the
-// camera at this+12, then sub_82283068), recomputes the sun's projector map
-// info at 0x82DD6100 (sub_821752E8, which the receivers sample with) and makes
-// the light view the render view. sub_82187330 closes it: resolves the depth
-// into the projector map's texture and pops the surface. Every node between
-// the two draws shadow casters, ~3000 of the ~4000 draws of a busy field frame
-// on the console.
+// The sun shadow pass is a stack object bdRenderViewSubmit builds (vtable
+// 0x8206C8A0) and runs in three steps. bdShaderSystemBeginFrame calls its
+// vtable[3], sub_82187168, which opens the pass: it pushes a 1024x1024 depth
+// surface, clears it, builds the camera view (bdBuildViewMatrix on the camera
+// at this+12, then sub_82283068), recomputes the sun's projector map info at
+// 0x82DD6100 (sub_821752E8, which the receivers sample with) and makes the
+// light view the render view. bdSceneNodeSubmitRenderList then walks the
+// shadow caster list (~3000 of the ~4000 draws of a busy field frame on the
+// console) and calls vtable[4], sub_82187330, which closes the pass: it
+// resolves the depth into the projector map's texture and pops the surface.
 //
 // On a frame that reuses the map, the opening is replaced by what it leaves
-// behind for later passes (the camera view build and the render states it
-// sets and does not restore), every node up to the closing is left out of the
-// walk, in whichever lists they are, and the closing only restores its render
-// state. The texture keeps last frame's depth (the resolve alias is
-// materialized before its surface is issued again, gpu/graveyard.cpp) and the
-// projector map info keeps the light matrix it was drawn with, since
-// sub_821752E8 does not run.
+// behind for later passes (sampler setup, the camera view build and the render
+// states it sets and does not restore), the caster list is not walked, and the
+// closing only restores its render state. The texture keeps last frame's depth
+// (the resolve alias is materialized before its surface is issued again,
+// gpu/graveyard.cpp) and the projector map info keeps the light matrix it was
+// drawn with, since sub_821752E8 does not run.
 //
-// A camera cut or a new scene draws the map at once: the inputs the light
-// frustum is built from (camera +288 and +300) moving more than
-// kCutDistance, or a different pass object.
+// A camera cut or a new camera draws the map at once: the eye and target the
+// light frustum is built from (camera +288 and +300) moving more than
+// kCutDistance, or a different camera.
 
-REX_EXTERN(__imp__bdSceneSubmitRenderList);
 REX_EXTERN(__imp__sub_82187168);
 REX_EXTERN(__imp__sub_82187330);
+REX_EXTERN(__imp__bdSceneNodeSubmitRenderList);
 REX_EXTERN(bdSetRenderState);
 REX_EXTERN(bdBuildViewMatrix);
 REX_EXTERN(sub_82283068);
+REX_EXTERN(sub_82184A88);
 
 namespace {
 
 constexpr u32 kShadowPassOpen = 0x82187168;
-constexpr u32 kShadowPassClose = 0x82187330;
-constexpr u32 kNodeTypeObject = 2;
-constexpr u32 kNodeNext = 8;
-constexpr u32 kNodeObject = 12;
+constexpr u32 kVtableOpen = 12;
 constexpr u32 kPassCamera = 12;
 constexpr u32 kCameraView = 160;
 constexpr u32 kCameraProj = 224;
-constexpr u32 kCameraLightInputs = 288; // two vec3, +288 and +300
+constexpr u32 kCameraLightInputs = 288; // eye at +288, target at +300
 constexpr float kCutDistance = 48.0f;
-constexpr int kMaxNodes = 4096;
 
 struct Stats {
-  u64 drawn = 0, reused = 0, forced = 0, opened = 0, unpaired = 0;
+  u64 drawn = 0, reused = 0, forced = 0, unpaired = 0;
   std::chrono::steady_clock::time_point last{};
 };
 
 struct State {
-  u32 object = 0;     // pass object the map was last drawn by
+  u32 camera = 0;     // camera the map was last drawn for
   int sinceDrawn = 0; // frames reusing it since
   float inputs[6] = {};
   Stats stats;
 } g_shadow;
 
-u32 NodeFunction(u32 node) {
-  if (bd::mem::load<u32>(node) != kNodeTypeObject)
-    return 0;
-  const u32 object = bd::mem::load<u32>(node + kNodeObject);
-  const u32 vtable = object ? bd::mem::load<u32>(object) : 0;
-  return vtable ? bd::mem::load<u32>(vtable + 4) : 0;
-}
+// Set from a skipped opening to its closing.
+bool g_reusing = false;
 
 void ReadInputs(u32 camera, float out[6]) {
   for (int i = 0; i < 6; ++i)
@@ -110,26 +101,24 @@ void LogStats() {
   if (now - st.last < std::chrono::seconds(10))
     return;
   if (st.last.time_since_epoch().count() != 0)
-    BD_INFO("[shadow] sun map drawn {} reused {} (cuts {}), pass opened by the "
-            "game {}, closing missed {}",
-            st.drawn, st.reused, st.forced, st.opened, st.unpaired);
+    BD_INFO("[shadow] sun map drawn {} reused {} (cuts {}), closing missed {}",
+            st.drawn, st.reused, st.forced, st.unpaired);
   st = Stats{};
   st.last = now;
 }
 
 // Should this frame's map be drawn? Updates the bookkeeping either way.
-bool DrawThisFrame(u32 object, int interval) {
+bool DrawThisFrame(u32 camera, int interval) {
   auto &g = g_shadow;
-  const u32 camera = bd::mem::load<u32>(object + kPassCamera);
   float inputs[6];
   ReadInputs(camera, inputs);
   bool draw = interval <= 1 || ++g.sinceDrawn >= interval;
-  if (!draw && (object != g.object || MovedFar(inputs, g.inputs))) {
+  if (!draw && (camera != g.camera || MovedFar(inputs, g.inputs))) {
     draw = true;
     ++g.stats.forced;
   }
   if (draw) {
-    g.object = object;
+    g.camera = camera;
     g.sinceDrawn = 0;
     std::copy(inputs, inputs + 6, g.inputs);
     ++g.stats.drawn;
@@ -146,12 +135,13 @@ void SetRenderState(PPCContext &ctx, u8 *base, u32 state, u32 value) {
 }
 
 // What the skipped opening would have left for the passes after it.
-void StandInForOpen(PPCContext &ctx, u8 *base, u32 object) {
+void StandInForOpen(PPCContext &ctx, u8 *base, u32 camera) {
   SetRenderState(ctx, base, 60, 0);
   SetRenderState(ctx, base, 72, 6);
   SetRenderState(ctx, base, 76, 7);
   SetRenderState(ctx, base, 40, 1);
-  if (const u32 camera = bd::mem::load<u32>(object + kPassCamera)) {
+  sub_82184A88(ctx, base);
+  if (camera) {
     ctx.r3.u64 = 0;
     ctx.r4.u64 = camera + kCameraView;
     ctx.r5.u64 = camera + kCameraProj;
@@ -162,97 +152,46 @@ void StandInForOpen(PPCContext &ctx, u8 *base, u32 object) {
 
 // And the closing: the opening sets 212 to 0, the closing back to 7.
 void StandInForClose(PPCContext &ctx, u8 *base) {
+  g_reusing = false;
   SetRenderState(ctx, base, 212, 7);
 }
 
-// Set from a skipped opening to the closing: every node in between is left
-// out, whichever lists it is in.
-bool g_reusing = false;
-
-void Submit(PPCContext &ctx, u8 *base, u32 scene, u32 mask, u32 head) {
-  ctx.r3.u64 = scene;
-  ctx.r4.u64 = mask;
-  ctx.r5.u64 = head;
-  __imp__bdSceneSubmitRenderList(ctx, base);
-}
-
-// The nodes from head up to (not including) stop.
-void SubmitUntil(PPCContext &ctx, u8 *base, u32 scene, u32 mask, u32 head,
-                 u32 last, u32 stop) {
-  if (!last)
-    return; // stop is the head
-  bd::mem::store<u32>(last + kNodeNext, 0);
-  Submit(ctx, base, scene, mask, head);
-  bd::mem::store<u32>(last + kNodeNext, stop);
-}
-
-// First node from head running fn, and the node before it.
-u32 FindNode(u32 head, u32 fn, u32 &before) {
-  before = 0;
-  int n = 0;
-  for (u32 node = head; node && n < kMaxNodes;
-       before = node, node = bd::mem::load<u32>(node + kNodeNext), ++n)
-    if (NodeFunction(node) == fn)
-      return node;
-  before = 0;
-  return 0;
+bool IsSunShadowPass(u32 object) {
+  const u32 vtable = object ? bd::mem::load<u32>(object) : 0;
+  return vtable && bd::mem::load<u32>(vtable + kVtableOpen) == kShadowPassOpen;
 }
 
 } // namespace
 
-REX_HOOK_RAW(bdSceneSubmitRenderList) {
-  const int interval = REXCVAR_GET(bd_shadow_update_interval);
-  const u32 scene = ctx.r3.u32, mask = ctx.r4.u32, head = ctx.r5.u32;
-  if ((interval <= 1 && !g_reusing) || !head) {
-    __imp__bdSceneSubmitRenderList(ctx, base);
-    return;
-  }
-  u32 beforeOpen = 0;
-  const u32 open = FindNode(head, kShadowPassOpen, beforeOpen);
-  if (g_reusing && open) {
-    // The closing never came: draw from here as the game would.
-    g_reusing = false;
+REX_HOOK_RAW(sub_82187168) {
+  if (g_reusing) {
+    g_reusing = false; // the last one was never closed
     ++g_shadow.stats.unpaired;
   }
-  if (g_reusing) {
-    // Inside a skipped pass: only the closing and what follows it run.
-    u32 beforeClose = 0;
-    if (const u32 close = FindNode(head, kShadowPassClose, beforeClose))
-      Submit(ctx, base, scene, mask, close);
-    return;
-  }
-  if (!open) {
-    __imp__bdSceneSubmitRenderList(ctx, base);
-    return;
-  }
   LogStats();
-  const u32 object = bd::mem::load<u32>(open + kNodeObject);
-  if (DrawThisFrame(object, interval)) {
-    __imp__bdSceneSubmitRenderList(ctx, base);
+  const int interval = REXCVAR_GET(bd_shadow_update_interval);
+  const u32 camera = bd::mem::load<u32>(ctx.r3.u32 + kPassCamera);
+  if (DrawThisFrame(camera, interval)) {
+    __imp__sub_82187168(ctx, base);
     return;
   }
-  BD_CPU_ZONE("ShadowMapReuse");
-  SubmitUntil(ctx, base, scene, mask, head, beforeOpen, open);
-  StandInForOpen(ctx, base, object);
   g_reusing = true;
-  u32 beforeClose = 0;
-  if (const u32 close = FindNode(open, kShadowPassClose, beforeClose))
-    Submit(ctx, base, scene, mask, close);
+  StandInForOpen(ctx, base, camera);
 }
 
-// Counts the game's own opens: with the reuse on, a busy log line where
-// "reused" stays 0 and this keeps counting means the pass was not found in
-// the lists bdSceneSubmitRenderList walks.
-REX_HOOK_RAW(sub_82187168) {
-  ++g_shadow.stats.opened;
-  __imp__sub_82187168(ctx, base);
+// The caster list and the closing of a skipped pass: nothing to draw, and the
+// closing would resolve a depth surface that was never drawn.
+REX_HOOK_RAW(bdSceneNodeSubmitRenderList) {
+  if (g_reusing && IsSunShadowPass(ctx.r3.u32)) {
+    BD_CPU_ZONE("ShadowMapReuse");
+    StandInForClose(ctx, base);
+    return;
+  }
+  __imp__bdSceneNodeSubmitRenderList(ctx, base);
 }
 
-// The closing of a skipped pass resolves nothing: the depth surface it would
-// resolve was never drawn.
 REX_HOOK_RAW(sub_82187330) {
   if (g_reusing) {
-    g_reusing = false;
     StandInForClose(ctx, base);
     return;
   }
