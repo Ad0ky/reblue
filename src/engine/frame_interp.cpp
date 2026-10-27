@@ -8,6 +8,7 @@
  *            See LICENSE file in the project root for full license text.
  */
 #include "engine/frame_interp.h"
+#include <rex/cvar.h>
 
 #include <algorithm>
 #include <atomic>
@@ -49,6 +50,9 @@
 #include "engine/state_layout.h"
 #include "engine/virtual_buttons.h"
 #include "gpu/gpu.h"
+#include "core/logging.h"
+#include "gpu/settings.h"
+#include "gpu/hooks/tweaks.h"
 
 namespace {
 
@@ -2906,9 +2910,72 @@ REX_HOOK_RAW(bdSceneNodeProcessRenderCmds) {
   __imp__bdSceneNodeProcessRenderCmds(ctx, base);
 }
 
+REXCVAR_DEFINE_DOUBLE(bd_shadow_min_caster, 2.0, "Graphics",
+                      "Sun shadow casters smaller than this many shadow-map "
+                      "texels across are not drawn into the shadow map (their "
+                      "shadow is a speck). 0 draws all. Read at start.");
+
+namespace {
+
+// Sun shadow casters too small to show: on the console the shadow map pass
+// drew ~3000 of the ~4000 draws of a busy field frame (grass and bushes
+// mostly), each costing the draw thread as much as a visible one. A node's
+// bounding radius as bdSceneNodeCullTraverse tests it (the view's scale at
+// +44 times the node's radius at +32) against bd_shadow_min_caster shadow-map
+// texels of diameter. BD's sun frustum saturates at a half-extent of ~512
+// world units over a 1024-texel map at coverage 1.0 (tweaks.cpp), so one
+// texel is ~coverage * 1024 / dimension units.
+struct CasterStats {
+  u64 seen = 0, skipped = 0;
+  u64 bins[8] = {}; // radius in texels: <0.5 <1 <2 <4 <8 <16 <32 >=32
+  std::chrono::steady_clock::time_point last{};
+};
+CasterStats g_casters;
+
+bool SkipSmallShadowCaster(const PPCContext &ctx) {
+  static const double minTexels = REXCVAR_GET(bd_shadow_min_caster);
+  if (!InShadowDepthPass())
+    return false;
+  const auto *radius = bd::mem::try_at<be_f32>(ctx.r3.u32 + 32);
+  const auto *scale = bd::mem::try_at<be_f32>(ctx.r6.u32 + 44);
+  if (!radius || !scale)
+    return false;
+  const double texel =
+      bd::gpu::ShadowCoverageScale() * 1024.0 /
+      double(std::max(512, bd::gpu::Settings::Get().ShadowDimension()));
+  const double r = double(float(*radius)) * double(float(*scale)) / texel;
+  auto &st = g_casters;
+  ++st.seen;
+  int bin = 0;
+  for (double edge = 0.5; bin < 7 && r >= edge; edge *= 2.0)
+    ++bin;
+  ++st.bins[bin];
+  const bool skip = minTexels > 0.0 && 2.0 * r < minTexels;
+  st.skipped += skip;
+  if ((st.seen & 1023) == 0) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - st.last > std::chrono::seconds(10)) {
+      st.last = now;
+      BD_INFO("[shadow] casters by radius in map texels: <0.5 {} <1 {} <2 {} "
+              "<4 {} <8 {} <16 {} <32 {} more {} | skipped (diameter under {} "
+              "texels) {} of {}",
+              st.bins[0], st.bins[1], st.bins[2], st.bins[3], st.bins[4],
+              st.bins[5], st.bins[6], st.bins[7], minTexels, st.skipped,
+              st.seen);
+      st = CasterStats{};
+      st.last = now;
+    }
+  }
+  return skip;
+}
+
+} // namespace
+
 REBLUE_HOT_DECLARE(bdSceneNodeDrawSingle)
 REX_HOOK_RAW(bdSceneNodeDrawSingle) {
   BD_CPU_ZONE("bdSceneNodeDrawSingle");
+  if (SkipSmallShadowCaster(ctx))
+    return;
   NodeDrawScope scope(ctx.r4.u32);
   REBLUE_HOT_CALL(bdSceneNodeDrawSingle)(ctx, base);
 }
@@ -3303,11 +3370,11 @@ REX_HOOK_RAW(bdVisualObjectCopyShadowBones) {
   e.copyTime = bd::engine::FrameTime();
 }
 
-REX_EXTERN(__imp__bdDrawRecordListReplay);
+REBLUE_HOT_DECLARE(bdDrawRecordListReplay)
 REX_HOOK_RAW(bdDrawRecordListReplay) {
   BD_CPU_ZONE("bdDrawRecordListReplay");
   t_inRecordReplay = true;
-  __imp__bdDrawRecordListReplay(ctx, base);
+  REBLUE_HOT_CALL(bdDrawRecordListReplay)(ctx, base);
   t_inRecordReplay = false;
 }
 
