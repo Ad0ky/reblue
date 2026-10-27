@@ -35,6 +35,7 @@
 #include "engine/d2anime/anime_mouse.h"
 #include "engine/d2anime/d2anime_task.h"
 #include "engine/field_camera.h"
+#include "cpu/hot_calls.h"
 #include "engine/frame_clock.h"
 #include "engine/game.h"
 #include "engine/guest_prim.h"
@@ -2905,11 +2906,11 @@ REX_HOOK_RAW(bdSceneNodeProcessRenderCmds) {
   __imp__bdSceneNodeProcessRenderCmds(ctx, base);
 }
 
-REX_EXTERN(__imp__bdSceneNodeDrawSingle);
+REBLUE_HOT_DECLARE(bdSceneNodeDrawSingle)
 REX_HOOK_RAW(bdSceneNodeDrawSingle) {
   BD_CPU_ZONE("bdSceneNodeDrawSingle");
   NodeDrawScope scope(ctx.r4.u32);
-  __imp__bdSceneNodeDrawSingle(ctx, base);
+  REBLUE_HOT_CALL(bdSceneNodeDrawSingle)(ctx, base);
 }
 
 REX_EXTERN(__imp__bdBuildMirrorViewProjection);
@@ -3094,7 +3095,7 @@ void ServeCameraMatrices(PPCContext &ctx) {
 
 } // namespace
 
-REX_EXTERN(__imp__bdBuildViewMatrix);
+REBLUE_HOT_DECLARE(bdBuildViewMatrix)
 REX_HOOK_RAW(bdBuildViewMatrix) {
   BD_CPU_ZONE("bdBuildViewMatrix");
   if (bd::engine::InterpolationActive()) {
@@ -3103,7 +3104,7 @@ REX_HOOK_RAW(bdBuildViewMatrix) {
     else if (ctx.r4.u32)
       ServeCameraMatrices(ctx);
   }
-  __imp__bdBuildViewMatrix(ctx, base);
+  REBLUE_HOT_CALL(bdBuildViewMatrix)(ctx, base);
 }
 
 REX_EXTERN(__imp__bdWorldToScreenPos3);
@@ -3278,7 +3279,7 @@ void bdListObjectBeginHook(PPCRegister &r3) {
 
 void bdListObjectEndHook() { g_listObject = 0; }
 
-REX_EXTERN(__imp__bdDoubleBufferAcquire);
+REBLUE_HOT_DECLARE(bdDoubleBufferAcquire)
 REX_EXTERN(__imp__bdVisualObjectCopyShadowBones);
 REX_HOOK_RAW(bdVisualObjectCopyShadowBones) {
   const u32 vo = ctx.r3.u32;
@@ -3290,7 +3291,7 @@ REX_HOOK_RAW(bdVisualObjectCopyShadowBones) {
     return;
   const u32 r3Out = ctx.r3.u32;
   ctx.r3.u32 = vo + kVOCurrBones;
-  __imp__bdDoubleBufferAcquire(ctx, base);
+  REBLUE_HOT_CALL(bdDoubleBufferAcquire)(ctx, base);
   const u32 currEA = ctx.r3.u32;
   ctx.r3.u32 = r3Out;
   if (!bd::mem::try_at<be_f32>(currEA))
@@ -3310,13 +3311,13 @@ REX_HOOK_RAW(bdDrawRecordListReplay) {
   t_inRecordReplay = false;
 }
 
-REX_EXTERN(__imp__bdCameraRender);
+REBLUE_HOT_DECLARE(bdCameraRender)
 REX_HOOK_RAW(bdCameraRender) {
   const u32 vo = ctx.r3.u32;
   const bool outer = !t_inCameraRender;
   t_inCameraRender = true;
   RegisterBoneArray(vo);
-  __imp__bdCameraRender(ctx, base);
+  REBLUE_HOT_CALL(bdCameraRender)(ctx, base);
   if (outer)
     t_inCameraRender = false;
 }
@@ -3418,7 +3419,7 @@ u32 ServeBones(BoneArray &e, double now) {
 
 REX_HOOK_RAW(bdDoubleBufferAcquire) {
   const u32 holder = ctx.r3.u32;
-  __imp__bdDoubleBufferAcquire(ctx, base);
+  REBLUE_HOT_CALL(bdDoubleBufferAcquire)(ctx, base);
   if (!bd::engine::InterpolationActive())
     return;
   std::lock_guard<std::mutex> lock(g_interpMutex);

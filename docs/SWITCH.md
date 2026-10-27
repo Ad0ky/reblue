@@ -122,6 +122,23 @@ What the build does already:
   `__imp__NAME`, which the compiler can inline (a call to the hookable weak
   alias cannot be). Every run re-checks the hooks, so a hook added later gets
   its plain calls back. `-NoDirectCalls` turns it off.
+- **Localized copies of the hottest game functions.** The host stage also runs
+  `tools/switch/localize.py`, which writes a copy of every function listed in
+  `src/platform/switch/hot/localized.txt` (picked from Draw Thread profiles)
+  into `generated/hot/localized.inc`: the same statements as the recompiled
+  function, but with the context registers it uses in C++ locals and guest
+  memory accessed without `volatile` (`src/platform/switch/hot_natives.cpp`).
+  The recompiled code keeps every register in the `PPCContext` and GCC
+  reloads them around each guest store; the hottest loop of
+  `bdSceneNodeDrawSingle`, a 24-word fill, went from 10 instructions per word
+  (two context loads and a store among them) to 4. A copy writes back before a call or return
+  only the registers it changed, and reloads after a call only those it reads
+  again (a dataflow over the function's statements); loops get a compiler
+  barrier at their head. `tools/switch/localize_check.py` runs both versions
+  of every listed function on the build machine from random registers and
+  memory, with stub callees that record the register file at every call, and
+  compares calls, registers and memory. `bd_cpu_natives = false` runs the
+  recompiled originals; the log says `[hot] localized copies: on`.
 - **LTO** (`run-switch-build.bat -Lto`): link-time optimisation of the game code
   and re:Blue (not the SDK). Faster code, a much slower link, and about 16 GB of
   RAM for Docker (Docker Desktop, Settings, Resources).

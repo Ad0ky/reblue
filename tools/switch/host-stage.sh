@@ -119,6 +119,10 @@ if [ "${DIRECT_CALLS:-1}" = 0 ]; then
 else
     python3 tools/switch/direct_calls.py "$root"
 fi
+# After the direct calls, so each copy calls its callees as the recompiled
+# function does (src/platform/switch/hot_natives.cpp).
+log "Localized copies (tools/switch/localize.py)"
+python3 tools/switch/localize.py "$root"
 
 # ---------------------------------------------------------------- shaders
 log "Host XenosRecomp"

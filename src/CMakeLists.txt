@@ -67,3 +67,13 @@ reblue_d3d12_sources(${reblue_d3d12_only})
 if(REBLUE_BUILD_INSTALLER)
     reblue_sources(${reblue_installer_only})
 endif()
+
+# The localized copies read guest memory without volatile, sometimes at another
+# width than it was written with (tools/switch/localize.py).
+if(REBLUE_SWITCH)
+    # Source properties belong to a directory: the targets are made at the top.
+    set_source_files_properties(
+        "${CMAKE_CURRENT_SOURCE_DIR}/platform/switch/hot_natives.cpp"
+        DIRECTORY "${PROJECT_SOURCE_DIR}"
+        PROPERTIES COMPILE_OPTIONS "-fno-strict-aliasing")
+endif()

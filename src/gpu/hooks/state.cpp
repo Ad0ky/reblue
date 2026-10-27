@@ -17,6 +17,7 @@
 #include <plume_render_interface.h>
 
 #include "core/logging.h"
+#include "cpu/hot_calls.h"
 #include "gpu/constant_buffers.h"
 #include "gpu/d3d.h"
 #include "gpu/device.h"
@@ -265,10 +266,10 @@ void D3DDevice_SetIndices_hook(u32 /*device*/, u32 indices_guest) {
 // (constant_buffers.h, MarkConstantRegisters).
 #if REBLUE_UBO_CONSTANTS
 #define REBLUE_FLOAT_CONSTANT_HOOK(fn, bank, mark)                             \
-  REX_EXTERN(__imp__##fn);                                                     \
+  REBLUE_HOT_DECLARE(fn)                                                       \
   REX_HOOK_RAW(fn) {                                                           \
     const u32 start = ctx.r4.u32, count = ctx.r6.u32;                          \
-    __imp__##fn(ctx, base);                                                    \
+    REBLUE_HOT_CALL(fn)(ctx, base);                                            \
     bd::gpu::MarkConstantRegisters(bank, start, count);                        \
     mark;                                                                      \
   }
@@ -335,7 +336,7 @@ REX_HOOK(D3DDevice_SetStreamSource, D3DDevice_SetStreamSource_hook);
 REX_HOOK(D3DDevice_SetIndices, D3DDevice_SetIndices_hook);
 // Raw, on the inherited context: a typed REX_IMPORT re-roots the guest stack
 // at ThreadState's r1 and overwrites the frames live underneath it.
-REX_EXTERN(__imp__bdSetRenderState);
+REBLUE_HOT_DECLARE(bdSetRenderState)
 REX_HOOK_RAW(bdSetRenderState) {
   const u32 offset = ctx.r3.u32;
   const u32 value = ctx.r4.u32;
@@ -349,5 +350,5 @@ REX_HOOK_RAW(bdSetRenderState) {
     bd::gpu::Video::SetAlphaThreshold(static_cast<float>(value) *
                                       kAlphaRefScale);
   }
-  __imp__bdSetRenderState(ctx, base);
+  REBLUE_HOT_CALL(bdSetRenderState)(ctx, base);
 }

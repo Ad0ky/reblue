@@ -1,0 +1,35 @@
+# Recompiled functions the Switch build replaces with localized copies
+# (tools/switch/localize.py, src/platform/switch/hot_natives.cpp). Picked from
+# Draw Thread profiles of the console (rex_perfil.log), hottest first.
+# "hooked": a hook in the sources already replaces the function; that hook
+# calls REBLUE_HOT_CALL(name) (cpu/hot_calls.h) instead of __imp__name.
+bdSceneNodeDrawSingle hooked
+bdSceneNodeCullTraverse
+sub_82287788
+sub_824915F8
+sub_821CE028
+sub_8221DB00
+sub_8221D548
+sub_82174648
+bdMatrixCopyAligned
+bdBuildViewMatrix hooked
+bdDoubleBufferAcquire hooked
+bdCameraRender hooked
+bdSetRenderState hooked
+D3DDevice_SetPixelShaderConstantFN hooked
+D3DDevice_SetVertexShaderConstantFN hooked
+bdSetSamplerState
+sub_822687C8
+sub_82177038
+sub_8225EBF0
+sub_82420468
+sub_82487AB0
+sub_822D3598
+sub_821981E0
+sub_82142C58
+sub_82492208
+sub_82189E00
+bdLookupAndSetRenderTarget
+bdLookupRenderTarget
+bdMatrixSet
+bdMatrixSetTranslation
