@@ -46,7 +46,7 @@ namespace {
 
 // 64 MiB in the 512 MiB vA0000000 window. Host shadow structs are small, so
 // this is generous. The "HostHeap Peak Bytes" plot says when to raise it.
-constexpr u32 kHeapSize = 64u * 1024u * 1024u;
+constexpr u32 kHeapSize = HostHeap::kSize;
 
 struct HeapState {
   std::mutex mutex; // o1heap is not internally synchronized.
@@ -126,6 +126,7 @@ bool HostHeap::Init() {
 
   s.handle = handle;
   s.guest_va = guest_va;
+  s_guest_base.store(guest_va, std::memory_order_release);
   s.host_base = host_base;
   s.ready = true;
 

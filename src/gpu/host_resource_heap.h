@@ -58,16 +58,35 @@ public:
     auto *memory = REX_KERNEL_MEMORY();
     const u32 guest = memory->HostToGuestVirtual(host_ptr);
     Unregister(guest);
+    host_ptr->selfVa = 0;  // a stale VA no longer passes FromGuest's check
     host_ptr->~T();
     HostHeap::Get().Free(host_ptr);
   }
 
   // Resolve a guest VA to its host struct, or nullptr if not Alloc'd here.
   // Caller must pass the correct T (no runtime type info in the header).
+  //
+  // Every object Alloc makes lives in HostHeap's block and records its own VA
+  // (selfVa; Free clears it), so a VA outside the block is no object, and one
+  // whose object says so is that object: no registry lookup. On the console
+  // the registry lookups of the draw thread missed the data cache (~5% of its
+  // time); the object itself is read next anyway. Anything else asks the
+  // registry as before.
   template <typename T> static T *FromGuest(u32 guest_va) {
-    if (!guest_va || !IsRegistered(guest_va))
+    if (!guest_va)
       return nullptr;
     auto *memory = REX_KERNEL_MEMORY();
+    const u32 heap = HostHeap::GuestBase();
+    if (heap) {
+      const u32 offset = guest_va - heap;
+      if (offset > HostHeap::kSize - sizeof(T))
+        return nullptr;
+      auto *obj = static_cast<T *>(memory->TranslateVirtual<void *>(guest_va));
+      if (obj->selfVa == guest_va)
+        return obj;
+    }
+    if (!IsRegistered(guest_va))
+      return nullptr;
     return static_cast<T *>(memory->TranslateVirtual<void *>(guest_va));
   }
 

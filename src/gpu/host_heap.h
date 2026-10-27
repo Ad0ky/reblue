@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <rex/types.h>
 
@@ -23,6 +24,11 @@ namespace bd::gpu {
 class HostHeap {
 public:
   static HostHeap &Get();
+
+  // The heap's one block of guest memory: every block Alloc returns lies in
+  // [GuestBase(), GuestBase() + kSize). GuestBase() is 0 before Init.
+  static constexpr u32 kSize = 64u * 1024u * 1024u;
+  static u32 GuestBase() { return s_guest_base.load(std::memory_order_acquire); }
 
   // Reserve the physical block + o1heapInit. Call once while the
   // renderer starts, before the first HostResourceHeap::Alloc. False on
@@ -48,6 +54,9 @@ public:
     bool ready;
   };
   Snapshot GetSnapshot();
+
+private:
+  static inline std::atomic<u32> s_guest_base{0};
 };
 
 } // namespace bd::gpu
