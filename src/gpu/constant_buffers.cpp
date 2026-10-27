@@ -598,6 +598,26 @@ bool EnsureDeltaBuffer(UploadState &s) {
   return s.deltaGpu != 0;
 }
 
+// One register from the guest's big-endian copy: byte swapped, NaN -> +0 (as
+// CopyByteSwap32FlushNaN).
+inline void LoadGuestRegister(u8 *out, const u8 *guest) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+  uint32x4_t v = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(guest)));
+  v = vbicq_u32(v, vcgtq_u32(vandq_u32(v, vdupq_n_u32(0x7FFFFFFFu)),
+                             vdupq_n_u32(0x7F800000u)));
+  vst1q_u8(out, vreinterpretq_u8_u32(v));
+#else
+  for (int i = 0; i < 4; ++i) {
+    u32 w;
+    std::memcpy(&w, guest + 4 * i, 4);
+    w = __builtin_bswap32(w);
+    if ((w & 0x7FFFFFFFu) > 0x7F800000u)
+      w = 0;
+    std::memcpy(out + 4 * i, &w, 4);
+  }
+#endif
+}
+
 inline bool SameRegister(const u8 *a, const u8 *b) {
   u64 x[2], y[2];
   std::memcpy(x, a, 16);
@@ -605,10 +625,41 @@ inline bool SameRegister(const u8 *a, const u8 *b) {
   return ((x[0] ^ y[0]) | (x[1] ^ y[1])) == 0;
 }
 
-std::atomic<u64> g_delta_pushes{0}, g_delta_bytes{0}, g_delta_draws{0};
+// Registers the engine writes straight into the device copy, not through the
+// D3D setters (state.cpp, tweaks.cpp): checked on every draw, since some of
+// those writers run between draws inside one hooked function.
+constexpr u8 kAlwaysVertex[] = {20, 21, 50, 51};
+constexpr u8 kAlwaysPixel[] = {3, 21, 50};
+
+struct DeltaDirty {
+  std::atomic<u64> bits[4]{};
+};
+DeltaDirty g_delta_dirty[2];
+
+std::atomic<u64> g_delta_pushes{0}, g_delta_bytes{0}, g_delta_draws{0},
+    g_delta_regs{0}, g_delta_misses{0};
 
 } // namespace
 #endif
+
+void MarkConstantRegisters(ConstantBank bank, u32 start, u32 count) {
+#if defined(PLUME_DEKO3D)
+  if (bank > kPixelBank || start >= kConstantRegisterCount || !count)
+    return;
+  const u32 end = std::min(start + count, kConstantRegisterCount);
+  auto &d = g_delta_dirty[bank];
+  for (u32 w = start / 64; w <= (end - 1) / 64; ++w) {
+    const u32 lo = std::max(start, w * 64) - w * 64;
+    const u32 hi = std::min(end, w * 64 + 64) - w * 64;
+    const u64 mask = (hi - lo == 64) ? ~0ull : (((1ull << (hi - lo)) - 1) << lo);
+    d.bits[w].fetch_or(mask, std::memory_order_relaxed);
+  }
+#else
+  (void)bank;
+  (void)start;
+  (void)count;
+#endif
+}
 
 bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
                         u32 device_guest, u32 bytes) {
@@ -617,47 +668,124 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
   auto &s = upload_state();
   if (!list || !device_guest || bank > kPixelBank || !EnsureDeltaBuffer(s))
     return false;
-  bytes = (std::min(bytes, kConstantBlockBytes) + 15u) & ~15u;
-  alignas(16) u8 block[kConstantBlockBytes];
-  CopyByteSwap32FlushNaN(
-      block,
-      device_guest + (bank == kVertexBank ? offsetof(D3DDevice, vsFloatConstants)
-                                          : offsetof(D3DDevice, psFloatConstants)),
-      bytes);
-  if (bank == kPixelBank)
-    PinScreenUVScaleReg(block);
+  const u32 regs = (std::min(bytes, kConstantBlockBytes) + 15u) / 16u;
+  const u8 *guest = bd::mem::at<const u8>(
+      device_guest + u32(bank == kVertexBank
+                             ? offsetof(D3DDevice, vsFloatConstants)
+                             : offsetof(D3DDevice, psFloatConstants)));
+  if (!guest)
+    return false;
 
-  u8 *shadow = s.deltaShadow[bank];
-  const u32 known = s.deltaValid[bank];
-  const u64 base = s.deltaGpu + u64(bank) * kConstantBlockBytes;
-  const u32 regs = bytes / 16;
-  u32 pushed = 0;
-  // Runs of changed registers; up to two unchanged ones inside a run are sent
-  // along, since every update costs a few command words of its own.
-  for (u32 r = 0; r < regs;) {
-    if (r * 16 < known && SameRegister(block + r * 16, shadow + r * 16)) {
-      ++r;
+  // The registers to look at: the ones the setters touched since they were
+  // last sent, the always-checked ones, and all that the GPU copy does not
+  // hold yet (after a new command list, or a shader reading further).
+  u64 want[4];
+  auto &dirty = g_delta_dirty[bank];
+  for (u32 w = 0; w < 4; ++w) {
+    const u32 lo = w * 64;
+    if (lo >= regs) {
+      want[w] = 0;
       continue;
     }
-    const u32 start = r;
-    u32 end = r + 1, gap = 0;
-    for (u32 k = r + 1; k < regs; ++k) {
-      if (k * 16 >= known || !SameRegister(block + k * 16, shadow + k * 16)) {
-        end = k + 1;
-        gap = 0;
-      } else if (++gap > 2) {
+    const u64 inRange =
+        regs - lo >= 64 ? ~0ull : ((1ull << (regs - lo)) - 1);
+    // Bits past the shader's range stay set for a later shader that reads them.
+    want[w] = dirty.bits[w].fetch_and(~inRange, std::memory_order_relaxed) &
+              inRange;
+  }
+  const u32 known = s.deltaValid[bank] / 16;
+  for (u32 r = known; r < regs; ++r)
+    want[r / 64] |= 1ull << (r % 64);
+  const u8 *always = bank == kVertexBank ? kAlwaysVertex : kAlwaysPixel;
+  const u32 nAlways = bank == kVertexBank ? std::size(kAlwaysVertex)
+                                          : std::size(kAlwaysPixel);
+  for (u32 i = 0; i < nAlways; ++i)
+    if (always[i] < regs)
+      want[always[i] / 64] |= 1ull << (always[i] % 64);
+
+  // Sampled check of the whole range (one call in 64): a register that
+  // changed without being marked is a writer the list above misses.
+  static u32 verifyTick[2] = {0, 0};
+  const bool verify = (++verifyTick[bank] & 63u) == 0;
+
+  // The blur pixel shader reads c50 as the screen UV scale and gets 0.5
+  // (PinScreenUVScaleReg); the GPU copy then differs from the guest's c50, so
+  // it is looked at again by the next draw.
+  const auto *ps = bd::gpu::state().pipelineState.pixelShader;
+  const bool pinUv = bank == kPixelBank && regs > 50 && ps &&
+                     ps->shaderCacheEntry &&
+                     ps->shaderCacheEntry->hash == kBDBlurPSHash;
+  if (pinUv)
+    want[0] |= 1ull << 50;
+
+  u8 *shadow = s.deltaShadow[bank];
+  const u64 base = s.deltaGpu + u64(bank) * kConstantBlockBytes;
+  u32 pushed = 0, looked = 0;
+  u32 runStart = 0, runEnd = 0; // [start, end) registers, end 0 = no run
+  auto flush = [&] {
+    if (!runEnd)
+      return;
+    const u32 off = runStart * 16, len = (runEnd - runStart) * 16;
+    plume::Deko3DPushUniform(list, base, kConstantBlockBytes, off,
+                             shadow + off, len);
+    pushed += len;
+    runEnd = 0;
+  };
+  for (u32 r = 0; r < regs; ++r) {
+    const bool marked = (want[r / 64] >> (r % 64)) & 1u;
+    if (!marked && !verify) {
+      // Skip to the next marked register.
+      u32 w = r / 64;
+      u64 rest = want[w] & (~0ull << (r % 64));
+      while (!rest && ++w < 4)
+        rest = want[w];
+      if (!rest)
         break;
+      const u32 next = w * 64 + u32(__builtin_ctzll(rest));
+      if (runEnd && next > runEnd + 2)
+        flush();
+      r = next - 1;
+      continue;
+    }
+    ++looked;
+    alignas(16) u8 v[16];
+    LoadGuestRegister(v, guest + r * 16);
+    if (pinUv && r == 50) {
+      const float half = 0.5f;
+      std::memcpy(v, &half, 4);
+      std::memcpy(v + 4, &half, 4);
+    }
+    if (r < known && SameRegister(v, shadow + r * 16))
+      continue;
+    if (!marked) {
+      const u32 n = u32(g_delta_misses.fetch_add(1, std::memory_order_relaxed));
+      if (n < 24) {
+        const auto *sh = bank == kVertexBank
+                             ? bd::gpu::state().pipelineState.vertexShader
+                             : ps;
+        const u64 h = (sh && sh->shaderCacheEntry) ? sh->shaderCacheEntry->hash : 0;
+        std::fprintf(stderr,
+                     "[ubo] in-place constants: %s c%u changed without a "
+                     "setter (shader %016llX)\n",
+                     bank == kVertexBank ? "VS" : "PS", r,
+                     static_cast<unsigned long long>(h));
       }
     }
-    const u32 off = start * 16, len = (end - start) * 16;
-    plume::Deko3DPushUniform(list, base, kConstantBlockBytes, off, block + off,
-                             len);
-    std::memcpy(shadow + off, block + off, len);
-    pushed += len;
-    r = end;
+    std::memcpy(shadow + r * 16, v, 16);
+    if (runEnd && r <= runEnd + 2) {
+      runEnd = r + 1;
+    } else {
+      flush();
+      runStart = r;
+      runEnd = r + 1;
+    }
   }
-  s.deltaValid[bank] = std::max(known, bytes);
+  flush();
+  if (pinUv)
+    MarkConstantRegisters(kPixelBank, 50, 1);
+  s.deltaValid[bank] = std::max(s.deltaValid[bank], regs * 16);
   g_delta_draws.fetch_add(1, std::memory_order_relaxed);
+  g_delta_regs.fetch_add(looked, std::memory_order_relaxed);
   if (pushed) {
     g_delta_pushes.fetch_add(1, std::memory_order_relaxed);
     g_delta_bytes.fetch_add(pushed, std::memory_order_relaxed);
@@ -693,13 +821,16 @@ void BindDeltaConstants(plume::RenderCommandList *list,
 #endif
 }
 
-void DeltaConstantStats(u64 &draws, u64 &updates, u64 &bytes) {
+void DeltaConstantStats(u64 &draws, u64 &updates, u64 &bytes, u64 &regs,
+                        u64 &misses) {
 #if defined(PLUME_DEKO3D)
   draws = g_delta_draws.exchange(0, std::memory_order_relaxed);
   updates = g_delta_pushes.exchange(0, std::memory_order_relaxed);
   bytes = g_delta_bytes.exchange(0, std::memory_order_relaxed);
+  regs = g_delta_regs.exchange(0, std::memory_order_relaxed);
+  misses = g_delta_misses.load(std::memory_order_relaxed);
 #else
-  draws = updates = bytes = 0;
+  draws = updates = bytes = regs = misses = 0;
 #endif
 }
 #endif

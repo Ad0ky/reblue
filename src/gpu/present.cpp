@@ -113,10 +113,12 @@ public:
             d[6] / frames, d[7] / frames, d[8] / frames, d[9] / frames, d[10], d[11]);
 #if REBLUE_UBO_CONSTANTS
     if (DeltaConstantsEnabled()) {
-      u64 stages = 0, updates = 0, bytes = 0;
-      DeltaConstantStats(stages, updates, bytes);
-      BD_INFO("[deko3d] in-place constants per frame: {:.0f} stage checks, {:.0f} with changes, {:.1f} KiB sent",
-              double(stages) / frames, double(updates) / frames, double(bytes) / frames / 1024.0);
+      u64 stages = 0, updates = 0, bytes = 0, regs = 0, misses = 0;
+      DeltaConstantStats(stages, updates, bytes, regs, misses);
+      BD_INFO("[deko3d] in-place constants per frame: {:.0f} stage checks, {:.0f} with changes, {:.0f} registers "
+              "read, {:.1f} KiB sent | changes no setter announced (whole run): {}",
+              double(stages) / frames, double(updates) / frames, double(regs) / frames,
+              double(bytes) / frames / 1024.0, misses);
     }
 #endif
   }

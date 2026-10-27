@@ -17,6 +17,7 @@
 #include <plume_render_interface.h>
 
 #include "core/logging.h"
+#include "gpu/constant_buffers.h"
 #include "gpu/d3d.h"
 #include "gpu/device.h"
 #include "gpu/format.h"
@@ -259,13 +260,31 @@ void D3DDevice_SetIndices_hook(u32 /*device*/, u32 indices_guest) {
     mark;                                                                      \
   }
 
-REBLUE_CONSTANT_DIRTY_HOOK(D3DDevice_SetVertexShaderConstantFN,
+// The float setters (device r3, start register r4, data r5, count r6, tag mask
+// r7) also note which registers they wrote, for the deko3d in-place banks
+// (constant_buffers.h, MarkConstantRegisters).
+#if REBLUE_UBO_CONSTANTS
+#define REBLUE_FLOAT_CONSTANT_HOOK(fn, bank, mark)                             \
+  REX_EXTERN(__imp__##fn);                                                     \
+  REX_HOOK_RAW(fn) {                                                           \
+    const u32 start = ctx.r4.u32, count = ctx.r6.u32;                          \
+    __imp__##fn(ctx, base);                                                    \
+    bd::gpu::MarkConstantRegisters(bank, start, count);                        \
+    mark;                                                                      \
+  }
+#else
+#define REBLUE_FLOAT_CONSTANT_HOOK(fn, bank, mark) REBLUE_CONSTANT_DIRTY_HOOK(fn, mark)
+#endif
+
+REBLUE_FLOAT_CONSTANT_HOOK(D3DDevice_SetVertexShaderConstantFN,
+                           bd::gpu::kVertexBank,
                            bd::gpu::Video::MarkVSConstantsDirty())
 REBLUE_CONSTANT_DIRTY_HOOK(D3DDevice_SetVertexShaderConstantI,
                            bd::gpu::Video::MarkVSConstantsDirty())
 REBLUE_CONSTANT_DIRTY_HOOK(D3DDevice_SetVertexShaderConstantB,
                            bd::gpu::Video::MarkVSConstantsDirty())
-REBLUE_CONSTANT_DIRTY_HOOK(D3DDevice_SetPixelShaderConstantFN,
+REBLUE_FLOAT_CONSTANT_HOOK(D3DDevice_SetPixelShaderConstantFN,
+                           bd::gpu::kPixelBank,
                            bd::gpu::Video::MarkPSConstantsDirty())
 REBLUE_CONSTANT_DIRTY_HOOK(D3DDevice_SetPixelShaderConstantI,
                            bd::gpu::Video::MarkPSConstantsDirty())
@@ -291,6 +310,7 @@ REBLUE_CONSTANT_DIRTY_HOOK(Visual__DrawSortedQueues,
                            (bd::gpu::Video::MarkVSConstantsDirty(),
                             bd::gpu::Video::MarkPSConstantsDirty()))
 
+#undef REBLUE_FLOAT_CONSTANT_HOOK
 #undef REBLUE_CONSTANT_DIRTY_HOOK
 
 // bdSetRenderState. BD's chokepoint for every D3DRS write: the per-D3DRS guest

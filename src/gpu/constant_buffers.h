@@ -130,6 +130,10 @@ void BindDrawConstants(plume::RenderCommandList *list);
 // of a byte-swapped 4 KiB block per stage and draw. Set 5 is not used then:
 // BindDeltaConstants binds the three slots directly.
 bool DeltaConstantsEnabled();
+// The D3D float setters: registers [start, start + count) of the bank were
+// written. The in-place update looks only at these (plus a few the engine
+// writes inline, and a sampled check of the rest).
+void MarkConstantRegisters(ConstantBank bank, u32 start, u32 count);
 // The first 'bytes' of the bank from the guest device; false if not done.
 bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
                         u32 device_guest, u32 bytes);
@@ -137,7 +141,9 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
 void BindDeltaConstants(plume::RenderCommandList *list,
                         const ConstantAllocation &shared);
 // Draws, updates and bytes since the last call (the profiler's report).
-void DeltaConstantStats(u64 &draws, u64 &updates, u64 &bytes);
+// Also the registers looked at, and the changed ones no setter announced.
+void DeltaConstantStats(u64 &draws, u64 &updates, u64 &bytes, u64 &regs,
+                        u64 &misses);
 #else
 #define REBLUE_UBO_CONSTANTS 0
 #endif
