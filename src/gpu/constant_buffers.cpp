@@ -628,13 +628,19 @@ inline bool SameRegister(const u8 *a, const u8 *b) {
 // Registers the engine writes straight into the device copy, not through the
 // D3D setters (state.cpp, tweaks.cpp): checked on every draw, since some of
 // those writers run between draws inside one hooked function.
-constexpr u8 kAlwaysVertex[] = {20, 21, 50, 51};
-constexpr u8 kAlwaysPixel[] = {3, 21, 50};
+// c53 and c57 were found by the sampled check on the console (foliage sway:
+// bushes and trees flickered without them).
+constexpr u8 kAlwaysVertex[] = {20, 21, 50, 51, 53, 57};
+constexpr u8 kAlwaysPixel[] = {3, 21, 50, 53};
 
 struct DeltaDirty {
   std::atomic<u64> bits[4]{};
 };
 DeltaDirty g_delta_dirty[2];
+// Registers the sampled check caught changing without a setter: checked on
+// every draw from then on, so a writer missing from the lists above costs at
+// most a few frames of a stale value.
+DeltaDirty g_delta_learned[2];
 
 std::atomic<u64> g_delta_pushes{0}, g_delta_bytes{0}, g_delta_draws{0},
     g_delta_regs{0}, g_delta_misses{0};
@@ -702,11 +708,18 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
   for (u32 i = 0; i < nAlways; ++i)
     if (always[i] < regs)
       want[always[i] / 64] |= 1ull << (always[i] % 64);
+  for (u32 w = 0; w < 4 && w * 64 < regs; ++w) {
+    const u32 lo = w * 64;
+    const u64 inRange = regs - lo >= 64 ? ~0ull : ((1ull << (regs - lo)) - 1);
+    want[w] |= g_delta_learned[bank].bits[w].load(std::memory_order_relaxed) &
+               inRange;
+  }
 
-  // Sampled check of the whole range (one call in 64): a register that
-  // changed without being marked is a writer the list above misses.
+  // Sampled check of the whole range (one call in 32): a register that
+  // changed without being marked is a writer the lists above miss; it is
+  // learned (g_delta_learned).
   static u32 verifyTick[2] = {0, 0};
-  const bool verify = (++verifyTick[bank] & 63u) == 0;
+  const bool verify = (++verifyTick[bank] & 31u) == 0;
 
   // The blur pixel shader reads c50 as the screen UV scale and gets 0.5
   // (PinScreenUVScaleReg); the GPU copy then differs from the guest's c50, so
@@ -758,15 +771,18 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
     if (r < known && SameRegister(v, shadow + r * 16))
       continue;
     if (!marked) {
-      const u32 n = u32(g_delta_misses.fetch_add(1, std::memory_order_relaxed));
-      if (n < 24) {
+      g_delta_misses.fetch_add(1, std::memory_order_relaxed);
+      const u64 bit = 1ull << (r % 64);
+      const u64 before = g_delta_learned[bank].bits[r / 64].fetch_or(
+          bit, std::memory_order_relaxed);
+      if (!(before & bit)) {
         const auto *sh = bank == kVertexBank
                              ? bd::gpu::state().pipelineState.vertexShader
                              : ps;
         const u64 h = (sh && sh->shaderCacheEntry) ? sh->shaderCacheEntry->hash : 0;
         std::fprintf(stderr,
                      "[ubo] in-place constants: %s c%u changed without a "
-                     "setter (shader %016llX)\n",
+                     "setter (shader %016llX): checked on every draw from now\n",
                      bank == kVertexBank ? "VS" : "PS", r,
                      static_cast<unsigned long long>(h));
       }
