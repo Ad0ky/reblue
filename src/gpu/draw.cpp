@@ -258,8 +258,12 @@ bool Video::FlushRenderStateLocked(u32 device_guest) {
                        FloatConstantBytes(s.pipelineState.vertexShader));
     PushDeltaConstants(s.command_list, kPixelBank, device_guest,
                        FloatConstantBytes(s.pipelineState.pixelShader));
-    auto sc_alloc = UploadSharedConstants(device_guest);
-    BindDeltaConstants(s.command_list, sc_alloc);
+    if (PushDeltaShared(s.command_list, device_guest)) {
+      BindDeltaConstants(s.command_list, ConstantAllocation{});
+    } else {
+      auto sc_alloc = UploadSharedConstants(device_guest);
+      BindDeltaConstants(s.command_list, sc_alloc);
+    }
   } else
 #endif
   if (device_guest) {

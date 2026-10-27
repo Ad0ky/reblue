@@ -137,6 +137,10 @@ void MarkConstantRegisters(ConstantBank bank, u32 start, u32 count);
 // The first 'bytes' of the bank from the guest device; false if not done.
 bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
                         u32 device_guest, u32 bytes);
+// The shared block (texture and sampler indices, bool constants...) kept in
+// place too: built from the live state, its changed registers pushed, bound at
+// slot 2. False if not done (the caller uploads it as before).
+bool PushDeltaShared(plume::RenderCommandList *list, u32 device_guest);
 // Binds the two in-place banks and, if it has memory, the shared block.
 void BindDeltaConstants(plume::RenderCommandList *list,
                         const ConstantAllocation &shared);

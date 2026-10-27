@@ -108,7 +108,14 @@ struct UploadState {
   u64 deltaGpu = 0;
   bool deltaFailed = false;
   alignas(16) u8 deltaShadow[2][kConstantBlockBytes];
+  // The guest's own big-endian bytes of what deltaShadow holds swapped: a
+  // register is compared in this form (two plain loads, no byte swap).
+  alignas(16) u8 deltaRaw[2][kConstantBlockBytes];
   u32 deltaValid[2] = {0, 0};
+  bool deltaPinned = false;  // c50 of the pixel bank holds the blur's 0.5
+  // The shared block in place as well (third bank, after the two 4 KiB ones).
+  alignas(16) SharedConstants deltaShared{};
+  bool deltaSharedValid = false;
 #endif
 };
 
@@ -316,6 +323,7 @@ void InvalidateSharedBinding() {
   // the CPU compares against wrong.
   for (u32 &valid : s.deltaValid)
     valid = 0;
+  s.deltaSharedValid = false;
 #endif
 }
 
@@ -575,6 +583,9 @@ bool DeltaConstantsEnabled() {
 #if defined(PLUME_DEKO3D)
 namespace {
 
+constexpr u32 kSharedBlockBytes = 512;  // sizeof(SharedConstants), rounded
+static_assert(sizeof(SharedConstants) <= kSharedBlockBytes);
+
 bool EnsureDeltaBuffer(UploadState &s) {
   if (s.deltaGpu)
     return true;
@@ -586,7 +597,8 @@ bool EnsureDeltaBuffer(UploadState &s) {
   s.deltaBuffer = bd::gpu::CreateHostBuffer(
       device,
       plume::RenderBufferDesc::UploadBuffer(
-          2 * kConstantBlockBytes, plume::RenderBufferFlag::CONSTANT |
+          2 * kConstantBlockBytes + kSharedBlockBytes,
+          plume::RenderBufferFlag::CONSTANT |
                                        plume::RenderBufferFlag::DEVICE_ADDRESSABLE),
       "cb-delta-banks");
   if (!s.deltaBuffer) {
@@ -728,11 +740,14 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
                inRange;
   }
 
-  // Sampled check of the whole range (one call in 32): a register that
-  // changed without being marked is a writer the lists above miss; it is
-  // learned (g_delta_learned).
+  // Sampled check of the whole range: a register that changed without being
+  // marked is a writer the lists above miss; it is learned (g_delta_learned).
+  // One call in 32 for the first 4096 checks, one in 256 after (the console
+  // runs found their writers within seconds; the full read was ~2% of the
+  // draw thread).
   static u32 verifyTick[2] = {0, 0};
-  const bool verify = (++verifyTick[bank] & 31u) == 0;
+  const u32 tick = ++verifyTick[bank];
+  const bool verify = (tick & (tick < 131072u ? 31u : 255u)) == 0;
 
   // The blur pixel shader reads c50 as the screen UV scale and gets 0.5
   // (PinScreenUVScaleReg); the GPU copy then differs from the guest's c50, so
@@ -741,10 +756,14 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
   const bool pinUv = bank == kPixelBank && regs > 50 && ps &&
                      ps->shaderCacheEntry &&
                      ps->shaderCacheEntry->hash == kBDBlurPSHash;
-  if (pinUv)
+  // c50 is looked at whenever the pin is on now or was on the last time.
+  const bool pinCheck =
+      bank == kPixelBank && regs > 50 && (pinUv || s.deltaPinned);
+  if (pinCheck)
     want[0] |= 1ull << 50;
 
   u8 *shadow = s.deltaShadow[bank];
+  u8 *rawShadow = s.deltaRaw[bank];
   const u64 base = s.deltaGpu + u64(bank) * kConstantBlockBytes;
   u32 pushed = 0, looked = 0;
   u32 runStart = 0, runEnd = 0; // [start, end) registers, end 0 = no run
@@ -774,8 +793,12 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
       continue;
     }
     ++looked;
+    const u8 *gr = guest + r * 16;
+    if (r < known && !(pinCheck && r == 50) && SameRegister(gr, rawShadow + r * 16))
+      continue;
+    std::memcpy(rawShadow + r * 16, gr, 16);
     alignas(16) u8 v[16];
-    LoadGuestRegister(v, guest + r * 16);
+    LoadGuestRegister(v, gr);
     if (pinUv && r == 50) {
       const float half = 0.5f;
       std::memcpy(v, &half, 4);
@@ -810,8 +833,8 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
     }
   }
   flush();
-  if (pinUv)
-    MarkConstantRegisters(kPixelBank, 50, 1);
+  if (bank == kPixelBank && regs > 50)
+    s.deltaPinned = pinUv;
   s.deltaValid[bank] = std::max(s.deltaValid[bank], regs * 16);
   g_delta_draws.fetch_add(1, std::memory_order_relaxed);
   g_delta_regs.fetch_add(looked, std::memory_order_relaxed);
@@ -850,6 +873,59 @@ void BindDeltaConstants(plume::RenderCommandList *list,
 #endif
 }
 
+namespace {
+void BuildSharedConstants(UploadState &s, u32 device_guest);
+} // namespace
+
+bool PushDeltaShared(plume::RenderCommandList *list, u32 device_guest) {
+#if defined(PLUME_DEKO3D)
+  BD_CPU_ZONE("PushDeltaShared");
+  auto &s = upload_state();
+  if (!s.ready || !list || !EnsureDeltaBuffer(s))
+    return false;
+  BuildSharedConstants(s, device_guest);
+  const u64 base = s.deltaGpu + 2ull * kConstantBlockBytes;
+  const auto *now = reinterpret_cast<const u8 *>(&s.shared);
+  auto *held = reinterpret_cast<u8 *>(&s.deltaShared);
+  constexpr u32 kRegs = u32(sizeof(SharedConstants)) / 16;
+  static_assert(sizeof(SharedConstants) % 16 == 0);
+  u32 pushed = 0, runStart = 0, runEnd = 0;
+  auto flush = [&] {
+    if (!runEnd)
+      return;
+    const u32 off = runStart * 16, len = (runEnd - runStart) * 16;
+    plume::Deko3DPushUniform(list, base, kSharedBlockBytes, off, held + off, len);
+    pushed += len;
+    runEnd = 0;
+  };
+  for (u32 r = 0; r < kRegs; ++r) {
+    if (s.deltaSharedValid && SameRegister(now + r * 16, held + r * 16))
+      continue;
+    std::memcpy(held + r * 16, now + r * 16, 16);
+    if (runEnd && r <= runEnd + 2) {
+      runEnd = r + 1;
+    } else {
+      flush();
+      runStart = r;
+      runEnd = r + 1;
+    }
+  }
+  flush();
+  s.deltaSharedValid = true;
+  if (pushed)
+    g_delta_bytes.fetch_add(pushed, std::memory_order_relaxed);
+  // Bound at slot 2; bound textures (plume's bindTextures) read the indices
+  // from this CPU copy, which holds what the GPU copy will at the draw.
+  plume::Deko3DBindUniform(list, kSharedBank, base, kSharedBlockBytes);
+  plume::Deko3DSetSharedWords(list, &s.deltaShared, u32(sizeof(SharedConstants)));
+  return true;
+#else
+  (void)list;
+  (void)device_guest;
+  return false;
+#endif
+}
+
 void DeltaConstantStats(u64 &draws, u64 &updates, u64 &bytes, u64 &regs,
                         u64 &misses) {
 #if defined(PLUME_DEKO3D)
@@ -864,11 +940,10 @@ void DeltaConstantStats(u64 &draws, u64 &updates, u64 &bytes, u64 &regs,
 }
 #endif
 
-ConstantAllocation UploadSharedConstants(u32 device_guest) {
-  BD_CPU_ZONE("UploadSharedConstants");
-  auto &s = upload_state();
-  if (!s.ready)
-    return {};
+namespace {
+
+// s.shared from the live guest and renderer state.
+void BuildSharedConstants(UploadState &s, u32 device_guest) {
   // bd_anisotropy participates in DecodeFromFetch's output, so a live change
   // must miss the per-slot cache so stale sampler indices are re-resolved.
   const i32 aniso_now = Settings::Get().Anisotropy();
@@ -999,6 +1074,16 @@ ConstantAllocation UploadSharedConstants(u32 device_guest) {
   s.shared.blitHalfPixelOffsetY =
       vs.viewport.height > 0.0f ? -1.0f / vs.viewport.height : 0.0f;
 
+}
+
+} // namespace
+
+ConstantAllocation UploadSharedConstants(u32 device_guest) {
+  BD_CPU_ZONE("UploadSharedConstants");
+  auto &s = upload_state();
+  if (!s.ready)
+    return {};
+  BuildSharedConstants(s, device_guest);
   // Byte-identical to the block already bound on this command list: the live
   // CBV is still correct, skip the upload and let the caller skip the rebind.
   // SharedConstants padding is zero-initialized and never written, so memcmp
