@@ -27,6 +27,7 @@
 #include "core/logging.h"
 #include "engine/engine.h"
 #include "gpu/backend.h"
+#include "engine/frame_clock.h"
 #include "gpu/constant_buffers.h"
 #include "gpu/device.h"
 #include "gpu/output.h"
@@ -158,6 +159,9 @@ void PaceFrame(bool idle = false) {
   i32 fps = bd::engine::Settings::Get().FPSLimit();
   if (bd::engine::SofdecPlayer::Playing())
     fps = 30;
+  // Too slow to interpolate: the simulation's own rate, as with a 30 cap.
+  if (bd::engine::InterpolationThrottled() && (fps <= 0 || fps > 30))
+    fps = 30;
   if (idle && (fps <= 0 || fps > kIdleFPS))
     fps = kIdleFPS;
   if (fps <= 0) {
@@ -169,6 +173,8 @@ void PaceFrame(bool idle = false) {
   const auto now = Clock::now();
   if (next.time_since_epoch().count() != 0 && now < next) {
     std::this_thread::sleep_until(next);
+    bd::engine::AddPacingSleep(
+        std::chrono::duration<double>(Clock::now() - now).count());
     next += period;
   } else {
     next = now + period;

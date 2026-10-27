@@ -17,6 +17,12 @@ void Advance();
 
 bool InterpolationActive();
 
+// The frame rate cannot keep up with the 30Hz simulation (bd_interp_min_fps):
+// interpolation is off and the frame limiter holds 30 fps, as during a movie.
+bool InterpolationThrottled();
+// Time the frame limiter slept, so the throttle measures the frame's work.
+void AddPacingSleep(double seconds);
+
 bool TickDue();
 
 float Alpha();

@@ -8,16 +8,36 @@
 #include "engine/frame_clock.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 
+#include <rex/cvar.h>
+
+#include "core/logging.h"
 #include "engine/cutscene_pause.h"
 #include "engine/settings.h"
 #include "engine/sofdec_player.h"
+
+REXCVAR_DEFINE_INT32(bd_interp_min_fps, 36, "Game",
+                     "With the frame rate unlimited, the 30Hz simulation is "
+                     "interpolated. While a frame's work (without the frame "
+                     "limiter's wait) takes longer than 1/this s (a 2 s "
+                     "average) the game runs as with a 30 fps limit instead: "
+                     "no interpolation work, which then buys nothing. Back "
+                     "above this + 6. 0 = always interpolate.");
 
 namespace bd::engine {
 namespace {
 
 constexpr double kTick = 1.0 / 30.0;
+// InterpolationActive's inputs, refreshed once per frame by Advance: it is
+// asked from every interpolation hook, many times per frame.
+std::atomic<bool> g_interp{false};
+std::atomic<bool> g_interpKnown{false};
+bool g_slowFrames = false;
+std::atomic<bool> g_throttled{false};
+double g_rawFrameAvg = kTick;
+std::atomic<i64> g_pacingSleepNs{0};
 constexpr double kMaxReportedDelta = 1.0 / 15.0;
 constexpr double kMaxBacklog = kTick * 4.0;
 
@@ -67,9 +87,48 @@ double NowSeconds() {
 
 } // namespace
 
-bool InterpolationActive() {
+namespace {
+
+bool InterpolationWanted() {
   const i32 fps = Settings::Get().FPSLimit();
-  return (fps == 0 || fps > 30) && !SofdecPlayer::Playing();
+  return (fps == 0 || fps > 30) && !SofdecPlayer::Playing() && !g_slowFrames;
+}
+
+// A 2 s average of the real frame time decides g_slowFrames, with a gap
+// between the two thresholds so it does not flip at the edge.
+void UpdateSlowFrames(double raw) {
+  const i32 minFps = REXCVAR_GET(bd_interp_min_fps);
+  if (minFps <= 0) {
+    g_slowFrames = false;
+    return;
+  }
+  const double a = std::clamp(raw / 2.0, 0.01, 0.5);
+  g_rawFrameAvg += (std::min(raw, 0.5) - g_rawFrameAvg) * a;
+  const bool was = g_slowFrames;
+  if (!g_slowFrames && g_rawFrameAvg > 1.0 / double(minFps))
+    g_slowFrames = true;
+  else if (g_slowFrames && g_rawFrameAvg < 1.0 / double(minFps + 6))
+    g_slowFrames = false;
+  if (g_slowFrames != was)
+    BD_INFO("[frames] interpolation {} (frame work {:.1f} ms, bd_interp_min_fps {})",
+            g_slowFrames ? "off, 30 fps cap" : "back on", g_rawFrameAvg * 1000.0, minFps);
+}
+
+} // namespace
+
+bool InterpolationThrottled() {
+  return g_throttled.load(std::memory_order_relaxed);
+}
+
+void AddPacingSleep(double seconds) {
+  if (seconds > 0.0)
+    g_pacingSleepNs.fetch_add(i64(seconds * 1e9), std::memory_order_relaxed);
+}
+
+bool InterpolationActive() {
+  if (g_interpKnown.load(std::memory_order_acquire))
+    return g_interp.load(std::memory_order_relaxed);
+  return InterpolationWanted();
 }
 
 void Advance() {
@@ -83,6 +142,14 @@ void Advance() {
   const double raw =
       (g_lastTime > 0.0) ? std::max(now - g_lastTime, 0.0) : kTick;
   g_lastTime = now;
+  {
+    const double slept =
+        double(g_pacingSleepNs.exchange(0, std::memory_order_relaxed)) * 1e-9;
+    UpdateSlowFrames(std::max(raw - slept, 0.0));
+    g_throttled.store(g_slowFrames, std::memory_order_relaxed);
+  }
+  g_interp.store(InterpolationWanted(), std::memory_order_relaxed);
+  g_interpKnown.store(true, std::memory_order_release);
   const double dt = SmoothDelta(std::min(raw, kMaxReportedDelta));
   g_lastDelta = dt;
   g_frameTime += dt;
