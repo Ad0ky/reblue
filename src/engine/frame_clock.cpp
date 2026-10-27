@@ -24,7 +24,9 @@ REXCVAR_DEFINE_INT32(bd_interp_min_fps, 36, "Game",
                      "limiter's wait) takes longer than 1/this s (a 2 s "
                      "average) the game runs as with a 30 fps limit instead: "
                      "no interpolation work, which then buys nothing. Back "
-                     "above this + 6. 0 = always interpolate.");
+                     "above this + 12 (interpolating costs ~4 ms a frame on "
+                     "the Switch, so a closer threshold flips back and "
+                     "forth). 0 = always interpolate.");
 
 namespace bd::engine {
 namespace {
@@ -107,7 +109,7 @@ void UpdateSlowFrames(double raw) {
   const bool was = g_slowFrames;
   if (!g_slowFrames && g_rawFrameAvg > 1.0 / double(minFps))
     g_slowFrames = true;
-  else if (g_slowFrames && g_rawFrameAvg < 1.0 / double(minFps + 6))
+  else if (g_slowFrames && g_rawFrameAvg < 1.0 / double(minFps + 12))
     g_slowFrames = false;
   if (g_slowFrames != was)
     BD_INFO("[frames] interpolation {} (frame work {:.1f} ms, bd_interp_min_fps {})",
