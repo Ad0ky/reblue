@@ -65,7 +65,7 @@ RegistryAnswer Lookup(u32 guest_va) {
 void HostResourceHeap::Register(u32 guest_va, ResourceType type) {
   std::unique_lock lock(g_registry_mutex);
   g_registry[guest_va] = type;
-  g_registry_cache.Set(guest_va, true, type);
+  g_registry_cache.Update(guest_va, true, type);
 }
 
 void HostResourceHeap::Unregister(u32 guest_va) {

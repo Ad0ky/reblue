@@ -201,7 +201,7 @@ void RememberBufferStruct(u32 struct_va, bd::gpu::GuestBuffer *buf) {
     return;
   std::lock_guard lock(g_physicalBuffersMutex);
   g_physicalBufferStructs[struct_va] = buf;
-  g_physicalBufferStructsCache.Set(struct_va, true, buf);
+  g_physicalBufferStructsCache.Update(struct_va, true, buf);
 }
 
 // --- Block helpers. All require the caller to hold g_physicalBuffersMutex. ---
@@ -318,7 +318,7 @@ bd::gpu::GuestBuffer *TryRegisterBlockMesh(u32 struct_va, u32 base_va, u32 size,
     return nullptr;
   if (struct_va) {
     g_physicalBufferStructs[struct_va] = view;
-    g_physicalBufferStructsCache.Set(struct_va, true, view);
+    g_physicalBufferStructsCache.Update(struct_va, true, view);
   }
   return view;
 }

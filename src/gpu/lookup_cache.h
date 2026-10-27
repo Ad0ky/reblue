@@ -34,7 +34,41 @@ template <typename V, u32 kSlots = 4096> class LookupCache {
 public:
   // Lock-free. True when the slot holds 'key': *present says whether the map
   // has it, and *out its value.
+  //
+  // In front of the shared slots, each thread keeps a small cache of its own
+  // answers, tagged with the map's generation (bumped by Update and Erase, the
+  // calls that change the map): on the console the draw thread asks for the
+  // same few hundred resources every frame, and the shared table's 4096 slots
+  // (96 KiB) left most of those reads to miss the data cache (the first load
+  // of a slot was ~4% of the draw thread).
   bool Find(u32 key, bool *present, V *out) const {
+    Front &f = front_[FrontIndex(key)];
+    const u32 gen = gen_.load(std::memory_order_acquire);
+    if (f.owner == this && f.key == key && f.gen == gen && key) {
+      *present = f.present != 0;
+      std::memcpy(out, &f.bits, sizeof(V));
+      return true;
+    }
+    if (!FindShared(key, present, out))
+      return false;
+    f.owner = this;
+    f.key = key;
+    f.gen = gen;
+    f.present = *present ? 1 : 0;
+    f.bits = 0;
+    std::memcpy(&f.bits, out, sizeof(V));
+    return true;
+  }
+
+  // With the map's lock held: the map now has key -> value (or, present =
+  // false, does not have key). Every thread's own answers are dropped.
+  void Update(u32 key, bool present, V value) {
+    Set(key, present, value);
+    gen_.fetch_add(1, std::memory_order_acq_rel);
+  }
+
+private:
+  bool FindShared(u32 key, bool *present, V *out) const {
     const Slot &s = slots_[Index(key)];
     const u32 seq = s.seq.load(std::memory_order_acquire);
     if (seq & 1u)
@@ -50,8 +84,9 @@ public:
     return true;
   }
 
-  // With the map's lock held: the map now has key -> value (or, present =
-  // false, does not have key).
+public:
+  // With the map's lock held, after a miss: the map's answer for key, which
+  // did not change (Update when it did).
   void Set(u32 key, bool present, V value) {
     Slot &s = slots_[Index(key)];
     u64 bits = 0;
@@ -70,6 +105,7 @@ public:
     const Slot &s = slots_[Index(key)];
     if (s.key.load(std::memory_order_relaxed) == key)
       Set(key, false, V{});
+    gen_.fetch_add(1, std::memory_order_acq_rel);
   }
 
 private:
@@ -86,7 +122,19 @@ private:
       ++n;
     return n;
   }
+  struct Front {
+    const void *owner = nullptr;
+    u32 key = 0;
+    u32 gen = 0;
+    u64 bits = 0;
+    u32 present = 0;
+  };
+  static constexpr u32 kFront = 256;
+  static u32 FrontIndex(u32 key) { return (key * 2654435761u) >> 24; }
+
   Slot slots_[kSlots];
+  std::atomic<u32> gen_{1};
+  static inline thread_local Front front_[kFront];
 };
 
 } // namespace bd::gpu
