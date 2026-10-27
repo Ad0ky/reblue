@@ -45,6 +45,7 @@
 #include <new>
 #include <algorithm>
 #include <atomic>
+#include <cstdarg>
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
@@ -835,31 +836,46 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount], 
 }
 
 /*
- * Hang watch. The game froze hard at a load more than once and left nothing: the 10 s report stopped too,
- * because it takes locks a stuck game may hold (malloc's, the guest memory table's). When no frame has
- * been presented for kHangSeconds, this writes every thread's pc, lr and frame chain to rex_cuelgue.log
- * without allocating or taking any lock of the game's: a file opened at start, snprintf of integers into a
- * static buffer, write and fsync. Again every kHangRepeatSeconds while it lasts (a few times), so a slow
- * load that ends is told apart from a deadlock (the same stacks every time).
+ * Hang watch and flight recorder. The game froze hard at a load more than once and left nothing: the
+ * 10 s report stopped too, and the whole console locked up, so nothing written at the moment of the freeze
+ * survives. Two things, both without the heap or any lock of the game's (files opened at start, integer
+ * snprintf into static buffers, write and fsync):
+ *  - every second, every thread's pc, lr and frame chain, and a few counters, go to rex_ultimo_a.log and
+ *    rex_ultimo_b.log in turn (a write torn by the freeze spoils only one): after a lockup, the newer of the
+ *    two says what the game was doing at most a second before;
+ *  - when no frame has been presented for kHangSeconds, the same snapshot is appended to rex_cuelgue.log,
+ *    again every kHangRepeatSeconds while it lasts (a few times): a hang of the game itself, the same stacks
+ *    every time, is told apart from a slow load.
  */
 constexpr u64 kHangSeconds = 6;
 constexpr u64 kHangRepeatSeconds = 20;
 constexpr int kHangMaxDumps = 4;
+constexpr size_t kSnapSize = 48 * 1024;
 int g_hang_fd = -1;
-char g_hang_buf[1024];
+int g_snap_fd[2] = {-1, -1};
+char g_snap_buf[kSnapSize];
 
-void HangWrite(const char* text, int len) {
-  if (g_hang_fd >= 0 && len > 0)
-    (void)!write(g_hang_fd, text, size_t(len < int(sizeof(g_hang_buf)) ? len : int(sizeof(g_hang_buf)) - 1));
+// Appends to buf at *n (bounded); returns false when full.
+bool SnapPrintf(size_t* n, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
+bool SnapPrintf(size_t* n, const char* fmt, ...) {
+  if (*n + 2 >= kSnapSize)
+    return false;
+  va_list ap;
+  va_start(ap, fmt);
+  const int w = std::vsnprintf(g_snap_buf + *n, kSnapSize - *n, fmt, ap);
+  va_end(ap);
+  if (w < 0)
+    return false;
+  *n += std::min<size_t>(size_t(w), kSnapSize - *n - 1);
+  return true;
 }
 
-void HangDump(u64 seconds_without_frames, int index) {
-  if (g_hang_fd < 0)
-    return;
-  int n = std::snprintf(g_hang_buf, sizeof(g_hang_buf),
-                        "==== cuelgue %d: %llu s sin presentar un fotograma (imagen 0x%016llx)\n", index,
-                        (unsigned long long)seconds_without_frames, (unsigned long long)g_base);
-  HangWrite(g_hang_buf, n);
+// Every thread's state into g_snap_buf; returns its length.
+size_t Snapshot(const char* title, u64 value) {
+  size_t n = 0;
+  SnapPrintf(&n, "==== %s %llu | fotogramas presentados %llu | tick %llu | imagen 0x%016llx\n", title,
+             (unsigned long long)value, (unsigned long long)g_counters[0].load(std::memory_order_relaxed),
+             (unsigned long long)armGetSystemTick(), (unsigned long long)g_base);
   for (size_t idx = 0; idx < kMaxThreads; ++idx) {
     Slot& s = g_slots[idx];
     const u32 h = s.handle.load();
@@ -890,25 +906,20 @@ void HangDump(u64 seconds_without_frames, int index) {
     std::memcpy(name, s.name, 32);
     name[32] = 0;
     if (!ok) {
-      n = std::snprintf(g_hang_buf, sizeof(g_hang_buf), "-- hilo \"%s\": sin contexto\n", name[0] ? name : "?");
-      HangWrite(g_hang_buf, n);
+      SnapPrintf(&n, "-- hilo \"%s\": sin contexto\n", name[0] ? name : "?");
       continue;
     }
     auto rel = [](u64 a) -> unsigned long long { return InText(a) ? (unsigned long long)(a - g_base) : (unsigned long long)a; };
     auto tag = [](u64 a) -> const char* { return InText(a) ? "imagen+0x" : "0x"; };
-    n = std::snprintf(g_hang_buf, sizeof(g_hang_buf), "-- hilo \"%s\"%s: pc %s%llx lr %s%llx | pila", name[0] ? name : "?",
-                      AfterSvc(ctx.pc.x) ? " (esperando en el kernel)" : "", tag(ctx.pc.x), rel(ctx.pc.x), tag(ctx.lr),
-                      rel(ctx.lr));
-    for (size_t k = 0; k < 16 && frames[k] && n < int(sizeof(g_hang_buf)) - 40; ++k)
-      n += std::snprintf(g_hang_buf + n, sizeof(g_hang_buf) - size_t(n), " %s%llx", tag(frames[k]), rel(frames[k]));
-    if (n < int(sizeof(g_hang_buf)) - 2) {
-      g_hang_buf[n++] = '\n';
-      g_hang_buf[n] = 0;
-    }
-    HangWrite(g_hang_buf, n);
+    SnapPrintf(&n, "-- hilo \"%s\"%s: pc %s%llx lr %s%llx | pila", name[0] ? name : "?",
+               AfterSvc(ctx.pc.x) ? " (esperando en el kernel)" : "", tag(ctx.pc.x), rel(ctx.pc.x), tag(ctx.lr),
+               rel(ctx.lr));
+    for (size_t k = 0; k < 16 && frames[k]; ++k)
+      SnapPrintf(&n, " %s%llx", tag(frames[k]), rel(frames[k]));
+    SnapPrintf(&n, "\n");
   }
-  HangWrite("\n", 1);
-  fsync(g_hang_fd);
+  SnapPrintf(&n, "\n");
+  return n;
 }
 
 // Its own thread: the profiler's may itself be stuck in its report (malloc's lock) when the game hangs.
@@ -916,22 +927,40 @@ Thread g_hang_thread;
 void HangWatchMain(void*) {
   const u64 tick_freq = armGetSystemTickFreq();
   __real_svcSleepThread(kStartDelayNs);
-  // Opened now: writing it later must not need the heap.
-  g_hang_fd = open((std::string(RexSwitchLogDir()) + "rex_cuelgue.log").c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  // Opened now: writing them later must not need the heap.
+  const std::string dir = RexSwitchLogDir();
+  g_hang_fd = open((dir + "rex_cuelgue.log").c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  g_snap_fd[0] = open((dir + "rex_ultimo_a.log").c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  g_snap_fd[1] = open((dir + "rex_ultimo_b.log").c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
   u64 frames = g_counters[0].load(std::memory_order_relaxed);
-  u64 since = armGetSystemTick(), last_dump = 0;
+  u64 since = armGetSystemTick(), last_dump = 0, seq = 0;
   int dumps = 0;
   while (true) {
-    __real_svcSleepThread(500000000ULL);
+    __real_svcSleepThread(1000000000ULL);
     const u64 now = armGetSystemTick();
     const u64 frames_now = g_counters[0].load(std::memory_order_relaxed);
     if (frames_now != frames) {
       frames = frames_now;
       since = now;
       dumps = 0;
-    } else if (now - since >= kHangSeconds * tick_freq && dumps < kHangMaxDumps &&
-               (dumps == 0 || now - last_dump >= kHangRepeatSeconds * tick_freq)) {
-      HangDump((now - since) / tick_freq, ++dumps);
+    }
+    const bool hung = now - since >= kHangSeconds * tick_freq;
+    const bool dump = hung && dumps < kHangMaxDumps && (dumps == 0 || now - last_dump >= kHangRepeatSeconds * tick_freq);
+    // The flight recorder: the whole buffer (padded) over the older of the two files.
+    size_t n = Snapshot(hung ? "SIN FOTOGRAMAS, s:" : "instantanea", hung ? (now - since) / tick_freq : ++seq);
+    const int fd = g_snap_fd[seq & 1];
+    if (fd >= 0) {
+      std::memset(g_snap_buf + n, ' ', kSnapSize - n);
+      g_snap_buf[kSnapSize - 1] = '\n';
+      if (lseek(fd, 0, SEEK_SET) == 0) {
+        (void)!write(fd, g_snap_buf, kSnapSize);
+        fsync(fd);
+      }
+    }
+    if (dump && g_hang_fd >= 0) {
+      ++dumps;
+      (void)!write(g_hang_fd, g_snap_buf, n);
+      fsync(g_hang_fd);
       last_dump = armGetSystemTick();
     }
   }
