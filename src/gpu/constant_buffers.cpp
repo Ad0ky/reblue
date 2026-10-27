@@ -30,6 +30,10 @@
 #include "gpu/settings.h"
 #include "gpu/shaders/shader_cache.h"
 
+#if defined(PLUME_DEKO3D)
+#include <plume_deko3d.h>
+#endif
+
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
 #endif
@@ -97,6 +101,14 @@ struct UploadState {
   bool haveConstantSetBuilder = false;
   ConstantAllocation drawBlocks[3];
   bool drawBlocksChanged = true;
+  // DeltaConstantsEnabled: one uniform buffer holding the vertex bank then the
+  // pixel bank, updated in place by the command list; the bytes the GPU will
+  // hold after the updates recorded so far, and how many of them are known.
+  std::unique_ptr<plume::RenderBuffer> deltaBuffer;
+  u64 deltaGpu = 0;
+  bool deltaFailed = false;
+  alignas(16) u8 deltaShadow[2][kConstantBlockBytes];
+  u32 deltaValid[2] = {0, 0};
 #endif
 };
 
@@ -299,6 +311,11 @@ void InvalidateSharedBinding() {
   for (auto &block : s.drawBlocks)
     block = {};
   s.drawBlocksChanged = true;
+  // The in-place banks: the first draw of the list pushes what its shaders
+  // read in full, so a list that never reaches the GPU cannot leave the copy
+  // the CPU compares against wrong.
+  for (u32 &valid : s.deltaValid)
+    valid = 0;
 #endif
 }
 
@@ -527,6 +544,165 @@ ConstantAllocation UploadPixelShaderConstants(u32 device_guest, u32 bytes) {
   PinScreenUVScaleReg(alloc.memory);
   return alloc;
 }
+
+#if REBLUE_UBO_CONSTANTS
+}  // namespace bd::gpu
+
+REXCVAR_DEFINE_BOOL(bd_deko3d_delta_constants, true, "Switch",
+                    "deko3d: the vertex and pixel shader constants stay in one "
+                    "uniform buffer per stage that each draw updates in place, "
+                    "only the registers that changed, instead of a new 4 KiB "
+                    "block per stage and draw. Read at start.");
+
+namespace bd::gpu {
+
+bool DeltaConstantsEnabled() {
+#if defined(PLUME_DEKO3D)
+  static const bool enabled = [] {
+    const bool on = UsingDeko3D() && UboConstantsEnabled() &&
+                    REXCVAR_GET(bd_deko3d_delta_constants);
+    std::fprintf(stderr, "[ubo] vertex/pixel constants: %s\n",
+                 on ? "updated in place (bd_deko3d_delta_constants)"
+                    : "a new block per draw");
+    return on;
+  }();
+  return enabled;
+#else
+  return false;
+#endif
+}
+
+#if defined(PLUME_DEKO3D)
+namespace {
+
+bool EnsureDeltaBuffer(UploadState &s) {
+  if (s.deltaGpu)
+    return true;
+  if (s.deltaFailed)
+    return false;
+  auto *device = bd::gpu::Video::HostDevice();
+  if (!device)
+    return false;
+  s.deltaBuffer = bd::gpu::CreateHostBuffer(
+      device,
+      plume::RenderBufferDesc::UploadBuffer(
+          2 * kConstantBlockBytes, plume::RenderBufferFlag::CONSTANT |
+                                       plume::RenderBufferFlag::DEVICE_ADDRESSABLE),
+      "cb-delta-banks");
+  if (!s.deltaBuffer) {
+    s.deltaFailed = true;
+    std::fprintf(stderr, "[ubo] in-place constant buffer: createBuffer failed\n");
+    return false;
+  }
+  s.deltaGpu = s.deltaBuffer->getDeviceAddress();
+  return s.deltaGpu != 0;
+}
+
+inline bool SameRegister(const u8 *a, const u8 *b) {
+  u64 x[2], y[2];
+  std::memcpy(x, a, 16);
+  std::memcpy(y, b, 16);
+  return ((x[0] ^ y[0]) | (x[1] ^ y[1])) == 0;
+}
+
+std::atomic<u64> g_delta_pushes{0}, g_delta_bytes{0}, g_delta_draws{0};
+
+} // namespace
+#endif
+
+bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
+                        u32 device_guest, u32 bytes) {
+#if defined(PLUME_DEKO3D)
+  BD_CPU_ZONE("PushDeltaConstants");
+  auto &s = upload_state();
+  if (!list || !device_guest || bank > kPixelBank || !EnsureDeltaBuffer(s))
+    return false;
+  bytes = (std::min(bytes, kConstantBlockBytes) + 15u) & ~15u;
+  alignas(16) u8 block[kConstantBlockBytes];
+  CopyByteSwap32FlushNaN(
+      block,
+      device_guest + (bank == kVertexBank ? offsetof(D3DDevice, vsFloatConstants)
+                                          : offsetof(D3DDevice, psFloatConstants)),
+      bytes);
+  if (bank == kPixelBank)
+    PinScreenUVScaleReg(block);
+
+  u8 *shadow = s.deltaShadow[bank];
+  const u32 known = s.deltaValid[bank];
+  const u64 base = s.deltaGpu + u64(bank) * kConstantBlockBytes;
+  const u32 regs = bytes / 16;
+  u32 pushed = 0;
+  // Runs of changed registers; up to two unchanged ones inside a run are sent
+  // along, since every update costs a few command words of its own.
+  for (u32 r = 0; r < regs;) {
+    if (r * 16 < known && SameRegister(block + r * 16, shadow + r * 16)) {
+      ++r;
+      continue;
+    }
+    const u32 start = r;
+    u32 end = r + 1, gap = 0;
+    for (u32 k = r + 1; k < regs; ++k) {
+      if (k * 16 >= known || !SameRegister(block + k * 16, shadow + k * 16)) {
+        end = k + 1;
+        gap = 0;
+      } else if (++gap > 2) {
+        break;
+      }
+    }
+    const u32 off = start * 16, len = (end - start) * 16;
+    plume::Deko3DPushUniform(list, base, kConstantBlockBytes, off, block + off,
+                             len);
+    std::memcpy(shadow + off, block + off, len);
+    pushed += len;
+    r = end;
+  }
+  s.deltaValid[bank] = std::max(known, bytes);
+  g_delta_draws.fetch_add(1, std::memory_order_relaxed);
+  if (pushed) {
+    g_delta_pushes.fetch_add(1, std::memory_order_relaxed);
+    g_delta_bytes.fetch_add(pushed, std::memory_order_relaxed);
+  }
+  return true;
+#else
+  (void)list;
+  (void)bank;
+  (void)device_guest;
+  (void)bytes;
+  return false;
+#endif
+}
+
+void BindDeltaConstants(plume::RenderCommandList *list,
+                        const ConstantAllocation &shared) {
+#if defined(PLUME_DEKO3D)
+  auto &s = upload_state();
+  if (!list || !EnsureDeltaBuffer(s))
+    return;
+  // Set 5 is not bound in this mode: its slots are bound directly (binding 0
+  // vertex, 1 pixel, 2 shared, as the deko3d shaders declare them). Unchanged
+  // bindings cost a compare (Deko3DBindUniform).
+  plume::Deko3DBindUniform(list, kVertexBank, s.deltaGpu, kConstantBlockBytes);
+  plume::Deko3DBindUniform(list, kPixelBank, s.deltaGpu + kConstantBlockBytes,
+                           kConstantBlockBytes);
+  if (shared.memory)
+    plume::Deko3DBindUniform(list, kSharedBank, shared.gpuAddress,
+                             u32(sizeof(SharedConstants)));
+#else
+  (void)list;
+  (void)shared;
+#endif
+}
+
+void DeltaConstantStats(u64 &draws, u64 &updates, u64 &bytes) {
+#if defined(PLUME_DEKO3D)
+  draws = g_delta_draws.exchange(0, std::memory_order_relaxed);
+  updates = g_delta_pushes.exchange(0, std::memory_order_relaxed);
+  bytes = g_delta_bytes.exchange(0, std::memory_order_relaxed);
+#else
+  draws = updates = bytes = 0;
+#endif
+}
+#endif
 
 ConstantAllocation UploadSharedConstants(u32 device_guest) {
   BD_CPU_ZONE("UploadSharedConstants");

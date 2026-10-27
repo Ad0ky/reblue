@@ -122,6 +122,22 @@ void AddConstantDescriptorSet(plume::RenderPipelineLayoutBuilder &layout);
 void SetDrawConstants(ConstantBank bank, const ConstantAllocation &alloc);
 // Binds set 5 with the current blocks if any changed since the last bind.
 void BindDrawConstants(plume::RenderCommandList *list);
+
+// deko3d with bd_deko3d_delta_constants: the vertex and pixel banks are one
+// uniform buffer per stage that the command list updates in place
+// (dkCmdBufPushConstants, pipelined: earlier draws keep the old values), with
+// only the registers that differ from what the GPU will already hold, instead
+// of a byte-swapped 4 KiB block per stage and draw. Set 5 is not used then:
+// BindDeltaConstants binds the three slots directly.
+bool DeltaConstantsEnabled();
+// The first 'bytes' of the bank from the guest device; false if not done.
+bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
+                        u32 device_guest, u32 bytes);
+// Binds the two in-place banks and, if it has memory, the shared block.
+void BindDeltaConstants(plume::RenderCommandList *list,
+                        const ConstantAllocation &shared);
+// Draws, updates and bytes since the last call (the profiler's report).
+void DeltaConstantStats(u64 &draws, u64 &updates, u64 &bytes);
 #else
 #define REBLUE_UBO_CONSTANTS 0
 #endif

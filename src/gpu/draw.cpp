@@ -249,6 +249,29 @@ bool Video::FlushRenderStateLocked(u32 device_guest) {
   // constants are still live and the 4 KiB byte swap upload can be skipped.
   // Vulkan push offsets 0/8/16 follow the guest PushConstants member order
   // emitted by the recompiler.
+#if REBLUE_UBO_CONSTANTS
+  if (device_guest && DeltaConstantsEnabled()) {
+    // deko3d: the banks are updated in place, only what changed
+    // (constant_buffers.h); coverage as below.
+    static u32 vs_covered_d = 0, ps_covered_d = 0;
+    if (s.dirtyStates.vertexShaderConstants) vs_covered_d = 0;
+    if (s.dirtyStates.pixelShaderConstants) ps_covered_d = 0;
+    const u32 vs_bytes = FloatConstantBytes(s.pipelineState.vertexShader);
+    const u32 ps_bytes = FloatConstantBytes(s.pipelineState.pixelShader);
+    if (vs_bytes > vs_covered_d)
+      vs_covered_d = PushDeltaConstants(s.command_list, kVertexBank,
+                                        device_guest, vs_bytes)
+                         ? vs_bytes
+                         : 0;
+    if (ps_bytes > ps_covered_d)
+      ps_covered_d = PushDeltaConstants(s.command_list, kPixelBank,
+                                        device_guest, ps_bytes)
+                         ? ps_bytes
+                         : 0;
+    auto sc_alloc = UploadSharedConstants(device_guest);
+    BindDeltaConstants(s.command_list, sc_alloc);
+  } else
+#endif
   if (device_guest) {
     ConstantAllocation vs_alloc{}, ps_alloc{};
     // Only the part of each block the bound shader reads is copied

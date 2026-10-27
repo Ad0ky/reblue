@@ -111,6 +111,14 @@ public:
             "image, {:.1f} readbacks | in the window: {:.0f} uam compiles, {:.0f} DKSH cache hits",
             d[0] / frames, d[1] / frames, d[2] / frames, d[3] / frames, d[4] / frames, d[5] / frames,
             d[6] / frames, d[7] / frames, d[8] / frames, d[9] / frames, d[10], d[11]);
+#if REBLUE_UBO_CONSTANTS
+    if (DeltaConstantsEnabled()) {
+      u64 stages = 0, updates = 0, bytes = 0;
+      DeltaConstantStats(stages, updates, bytes);
+      BD_INFO("[deko3d] in-place constants per frame: {:.0f} stage checks, {:.0f} with changes, {:.1f} KiB sent",
+              double(stages) / frames, double(updates) / frames, double(bytes) / frames / 1024.0);
+    }
+#endif
   }
   u64 dk_last_[12] = {};
 #endif
