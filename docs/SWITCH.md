@@ -200,6 +200,12 @@ What the build does already:
   shadows of moving things trail by up to N-1 frames. A camera cut or a new
   scene draws it at once. 1 draws it every frame. The game log gets a
   `[shadow] sun map drawn .. reused ..` line every 10 s.
+- **Small far shadow casters.** `bd_shadow_min_pixels` (default 4) leaves out
+  of the sun shadow map every caster whose bounding sphere looks smaller than
+  that many pixels across from the camera: grass, bushes and posts in the
+  distance, which `bd_shadow_distance` 2.0 brings into the map by the
+  hundreds. Big casters keep their shadows at any distance. The `[shadow]
+  casters` log line counts them.
 - **Constant dirty marks.** `D3DDevice_Set*ShaderConstantF` marks the block
   dirty without the renderer lock once it is already dirty.
 - **Pipeline cache.** `cache/vulkan_pipelines.bin` beside the NRO keeps every

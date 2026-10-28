@@ -38,6 +38,7 @@
 #include "engine/field_camera.h"
 #include "cpu/hot_calls.h"
 #include "engine/frame_clock.h"
+#include "engine/shadow_cache.h"
 #include "engine/game.h"
 #include "engine/guest_prim.h"
 #include "engine/glyph_set.h"
@@ -2910,6 +2911,13 @@ REX_HOOK_RAW(bdSceneNodeProcessRenderCmds) {
   __imp__bdSceneNodeProcessRenderCmds(ctx, base);
 }
 
+REXCVAR_DEFINE_DOUBLE(bd_shadow_min_pixels, 4.0, "Graphics",
+                      "Sun shadow casters that look smaller than this many "
+                      "screen pixels across from the camera (small and far: "
+                      "grass, bushes, posts in the distance) are not drawn into "
+                      "the shadow map. Big casters keep their shadows at any "
+                      "distance. 0 draws all. Read at start.");
+
 REXCVAR_DEFINE_DOUBLE(bd_shadow_min_caster, 2.0, "Graphics",
                       "Sun shadow casters smaller than this many shadow-map "
                       "texels across are not drawn into the shadow map (their "
@@ -2926,14 +2934,44 @@ namespace {
 // world units over a 1024-texel map at coverage 1.0 (tweaks.cpp), so one
 // texel is ~coverage * 1024 / dimension units.
 struct CasterStats {
-  u64 seen = 0, skipped = 0;
+  u64 seen = 0, skipped = 0, far = 0;
   u64 bins[8] = {}; // radius in texels: <0.5 <1 <2 <4 <8 <16 <32 >=32
   std::chrono::steady_clock::time_point last{};
 };
 CasterStats g_casters;
 
+// Pixels across the screen per radian of view at 720 lines: the field camera's
+// vertical field of view is roughly 55 degrees, 720 / (2 tan 27.5).
+constexpr double kPixelsPerRadian = 690.0;
+
+// The caster's angular size from the camera eye, in screen pixels across: its
+// bounding sphere (center at +20 of the shape in r3, radius at +32, the view's
+// scale at +44 of r6) moved by the world matrix in r5, as
+// bdSceneNodeCullTraverse moves it for the frustum test. Negative when unknown.
+double CasterPixels(const PPCContext &ctx, double worldRadius) {
+  float eye[3];
+  if (!bd::engine::ShadowPassEye(eye))
+    return -1.0;
+  const auto *m = bd::mem::try_at<be_f32>(ctx.r5.u32);
+  const auto *c = bd::mem::try_at<be_f32>(ctx.r3.u32 + 20);
+  if (!m || !c)
+    return -1.0;
+  const float cx = c[0], cy = c[1], cz = c[2];
+  double d2 = 0.0;
+  for (int i = 0; i < 3; ++i) {
+    const double w = cx * float(m[i]) + cy * float(m[4 + i]) +
+                     cz * float(m[8 + i]) + float(m[12 + i]);
+    d2 += (w - eye[i]) * (w - eye[i]);
+  }
+  const double d = std::sqrt(d2);
+  if (!(d > worldRadius) || !std::isfinite(d))
+    return -1.0; // the eye is inside or the numbers are off: keep it
+  return 2.0 * worldRadius / d * kPixelsPerRadian;
+}
+
 bool SkipSmallShadowCaster(const PPCContext &ctx) {
   static const double minTexels = REXCVAR_GET(bd_shadow_min_caster);
+  static const double minPixels = REXCVAR_GET(bd_shadow_min_pixels);
   if (!InShadowDepthPass())
     return false;
   const auto *radius = bd::mem::try_at<be_f32>(ctx.r3.u32 + 32);
@@ -2943,25 +2981,31 @@ bool SkipSmallShadowCaster(const PPCContext &ctx) {
   const double texel =
       bd::gpu::ShadowCoverageScale() * 1024.0 /
       double(std::max(512, bd::gpu::Settings::Get().ShadowDimension()));
-  const double r = double(float(*radius)) * double(float(*scale)) / texel;
+  const double worldRadius = double(float(*radius)) * double(float(*scale));
+  const double r = worldRadius / texel;
   auto &st = g_casters;
   ++st.seen;
   int bin = 0;
   for (double edge = 0.5; bin < 7 && r >= edge; edge *= 2.0)
     ++bin;
   ++st.bins[bin];
-  const bool skip = minTexels > 0.0 && 2.0 * r < minTexels;
+  bool skip = minTexels > 0.0 && 2.0 * r < minTexels;
   st.skipped += skip;
+  if (!skip && minPixels > 0.0) {
+    const double px = CasterPixels(ctx, worldRadius);
+    skip = px >= 0.0 && px < minPixels;
+    st.far += skip;
+  }
   if ((st.seen & 1023) == 0) {
     const auto now = std::chrono::steady_clock::now();
     if (now - st.last > std::chrono::seconds(10)) {
       st.last = now;
       BD_INFO("[shadow] casters by radius in map texels: <0.5 {} <1 {} <2 {} "
               "<4 {} <8 {} <16 {} <32 {} more {} | skipped (diameter under {} "
-              "texels) {} of {}",
+              "texels) {}, small from the camera (under {} pixels) {}, of {}",
               st.bins[0], st.bins[1], st.bins[2], st.bins[3], st.bins[4],
               st.bins[5], st.bins[6], st.bins[7], minTexels, st.skipped,
-              st.seen);
+              minPixels, st.far, st.seen);
       st = CasterStats{};
       st.last = now;
     }

@@ -19,6 +19,7 @@
 #include "core/logging.h"
 #include "core/memory_helpers.h"
 #include "core/profiling.h"
+#include "engine/shadow_cache.h"
 
 REXCVAR_DEFINE_INT32(bd_shadow_update_interval, 2, "Graphics",
                      "The sun shadow map is drawn every this many frames and "
@@ -83,6 +84,10 @@ struct State {
 
 // Set from a skipped opening to its closing.
 bool g_reusing = false;
+
+// The eye of the camera whose pass opened last (ShadowPassEye).
+float g_eye[3] = {};
+bool g_hasEye = false;
 
 void ReadInputs(u32 camera, float out[6]) {
   for (int i = 0; i < 6; ++i)
@@ -167,6 +172,12 @@ REX_HOOK_RAW(sub_82187168) {
   LogStats();
   const int interval = REXCVAR_GET(bd_shadow_update_interval);
   const u32 camera = bd::mem::load<u32>(ctx.r3.u32 + kPassCamera);
+  if (camera) {
+    float inputs[6];
+    ReadInputs(camera, inputs);
+    std::copy(inputs, inputs + 3, g_eye);
+    g_hasEye = true;
+  }
   g_reusing = !DrawThisFrame(camera, interval);
   __imp__sub_82187168(ctx, base);
 }
@@ -194,4 +205,11 @@ REX_HOOK_RAW(sub_82187330) {
     return;
   }
   __imp__sub_82187330(ctx, base);
+}
+
+bool bd::engine::ShadowPassEye(float eye[3]) {
+  if (!g_hasEye)
+    return false;
+  std::copy(g_eye, g_eye + 3, eye);
+  return true;
 }
