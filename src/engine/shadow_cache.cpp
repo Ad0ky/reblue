@@ -37,13 +37,15 @@ REXCVAR_DEFINE_INT32(bd_shadow_update_interval, 2, "Graphics",
 // console) and calls vtable[4], sub_82187330, which closes the pass: it
 // resolves the depth into the projector map's texture and pops the surface.
 //
-// On a frame that reuses the map, the opening is replaced by what it leaves
-// behind for later passes (sampler setup, the camera view build and the render
-// states it sets and does not restore), the caster list is not walked, and the
-// closing only restores its render state. The texture keeps last frame's depth
-// (the resolve alias is materialized before its surface is issued again,
-// gpu/graveyard.cpp) and the projector map info keeps the light matrix it was
-// drawn with, since sub_821752E8 does not run.
+// On a frame that reuses the map, the opening runs as the game wrote it
+// except for sub_821752E8, so the projector map info keeps the light matrix
+// the map was drawn with; the caster list is not walked, and the closing runs
+// without its resolve, which would copy the freshly cleared surface over the
+// map. Everything else the pass sets for later passes (render states, the
+// light view the receivers are drawn against, the shader eye, the sampler
+// setup) is set exactly as on a drawn frame. A first version replaced the
+// opening by a stand-in and the receivers then used another pass's light
+// matrix on reused frames: the shadows jumped every other frame.
 //
 // A camera cut or a new camera draws the map at once: the eye and target the
 // light frustum is built from (camera +288 and +300) moving more than
@@ -51,21 +53,19 @@ REXCVAR_DEFINE_INT32(bd_shadow_update_interval, 2, "Graphics",
 
 REX_EXTERN(__imp__sub_82187168);
 REX_EXTERN(__imp__sub_82187330);
+REX_EXTERN(__imp__sub_821752E8);
 REX_EXTERN(__imp__bdSceneNodeSubmitRenderList);
 REX_EXTERN(bdSetRenderState);
-REX_EXTERN(bdBuildViewMatrix);
-REX_EXTERN(sub_82283068);
-REX_EXTERN(sub_82184A88);
+REX_EXTERN(bdDestroySurface);
+REX_EXTERN(bdRenderTargetRelease);
 
 namespace {
 
 constexpr u32 kShadowPassOpen = 0x82187168;
 constexpr u32 kVtableOpen = 12;
 constexpr u32 kPassCamera = 12;
-constexpr u32 kCameraView = 160;
-constexpr u32 kCameraProj = 224;
 constexpr u32 kCameraLightInputs = 288; // eye at +288, target at +300
-constexpr float kCutDistance = 48.0f;
+constexpr float kCutDistance = 128.0f; // the sun frustum is ~512 units across at coverage 1
 
 struct Stats {
   u64 drawn = 0, reused = 0, forced = 0, unpaired = 0;
@@ -134,26 +134,21 @@ void SetRenderState(PPCContext &ctx, u8 *base, u32 state, u32 value) {
   bdSetRenderState(ctx, base);
 }
 
-// What the skipped opening would have left for the passes after it.
-void StandInForOpen(PPCContext &ctx, u8 *base, u32 camera) {
-  SetRenderState(ctx, base, 60, 0);
-  SetRenderState(ctx, base, 72, 6);
-  SetRenderState(ctx, base, 76, 7);
-  SetRenderState(ctx, base, 40, 1);
-  sub_82184A88(ctx, base);
-  if (camera) {
-    ctx.r3.u64 = 0;
-    ctx.r4.u64 = camera + kCameraView;
-    ctx.r5.u64 = camera + kCameraProj;
-    bdBuildViewMatrix(ctx, base);
-    sub_82283068(ctx, base);
-  }
-}
+constexpr u32 kPassSurface = 36;
+constexpr u32 kShadowPassFlag = 0x82DBEA60;
 
-// And the closing: the opening sets 212 to 0, the closing back to 7.
-void StandInForClose(PPCContext &ctx, u8 *base) {
+// sub_82187330 without its D3DDevice_Resolve: render state 212 back to 7, pop
+// the render target, release the pass's depth surface, clear the pass flag.
+void CloseWithoutResolve(PPCContext &ctx, u8 *base, u32 pass) {
   g_reusing = false;
   SetRenderState(ctx, base, 212, 7);
+  bdDestroySurface(ctx, base);
+  if (const u32 surface = bd::mem::load<u32>(pass + kPassSurface)) {
+    ctx.r3.u64 = surface;
+    bdRenderTargetRelease(ctx, base);
+    bd::mem::store<u32>(pass + kPassSurface, 0);
+  }
+  bd::mem::store<u8>(kShadowPassFlag, 0);
 }
 
 bool IsSunShadowPass(u32 object) {
@@ -171,20 +166,22 @@ REX_HOOK_RAW(sub_82187168) {
   LogStats();
   const int interval = REXCVAR_GET(bd_shadow_update_interval);
   const u32 camera = bd::mem::load<u32>(ctx.r3.u32 + kPassCamera);
-  if (DrawThisFrame(camera, interval)) {
-    __imp__sub_82187168(ctx, base);
-    return;
-  }
-  g_reusing = true;
-  StandInForOpen(ctx, base, camera);
+  g_reusing = !DrawThisFrame(camera, interval);
+  __imp__sub_82187168(ctx, base);
 }
 
-// The caster list and the closing of a skipped pass: nothing to draw, and the
-// closing would resolve a depth surface that was never drawn.
+// The sun's light matrix: kept from the frame the map was drawn on.
+REX_HOOK_RAW(sub_821752E8) {
+  if (g_reusing)
+    return;
+  __imp__sub_821752E8(ctx, base);
+}
+
+// The caster list and the closing of a reused pass.
 REX_HOOK_RAW(bdSceneNodeSubmitRenderList) {
   if (g_reusing && IsSunShadowPass(ctx.r3.u32)) {
     BD_CPU_ZONE("ShadowMapReuse");
-    StandInForClose(ctx, base);
+    CloseWithoutResolve(ctx, base, ctx.r3.u32);
     return;
   }
   __imp__bdSceneNodeSubmitRenderList(ctx, base);
@@ -192,7 +189,7 @@ REX_HOOK_RAW(bdSceneNodeSubmitRenderList) {
 
 REX_HOOK_RAW(sub_82187330) {
   if (g_reusing) {
-    StandInForClose(ctx, base);
+    CloseWithoutResolve(ctx, base, ctx.r3.u32);
     return;
   }
   __imp__sub_82187330(ctx, base);
