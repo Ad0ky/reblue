@@ -71,3 +71,28 @@ sub_824931B8
 sub_82422410
 sub_824906C8
 sub_8227CB10
+# Third batch (2026-10-28 console profile): the next hottest functions of
+# the Main Thread and the Draw Thread not yet copied (each under 0.5%).
+sub_8227A568
+sub_824911F8
+sub_8272EC00
+bdSoundFindCueByName
+sub_8213BEE8
+sub_8227C640
+bdMatrixMultiply3
+bdSceneUpdate
+bdSceneNodeDraw
+bdFileLoaderSchedule
+sub_8213F5E8
+sub_823B8608
+sub_82422E00
+bdMatrixCopy
+sub_8247AB90
+sub_8218B0F0
+bdVisualObjectSetShaderConstants
+sub_8218B310
+sub_822150F0
+sub_82215AC0
+sub_82287EE0
+sub_8227EBE8
+sub_8227FE80
