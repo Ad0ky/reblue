@@ -47,9 +47,12 @@ REXCVAR_DEFINE_INT32(bd_shadow_update_interval, 2, "Graphics",
 // opening by a stand-in and the receivers then used another pass's light
 // matrix on reused frames: the shadows jumped every other frame.
 //
-// A camera cut or a new camera draws the map at once: the eye and target the
-// light frustum is built from (camera +288 and +300) moving more than
-// kCutDistance, or a different camera.
+// A camera cut draws the map at once: the eye or target the light frustum is
+// built from (camera +288 and +300) more than kCutDistance from where they
+// were when the map was drawn. Which camera object it is does not matter: in
+// some field scenes two cameras with the same eye open the pass every frame
+// (a reused map is still the pair of map and matrix last drawn), and keying on
+// the camera made every one of those frames a cut.
 
 REX_EXTERN(__imp__sub_82187168);
 REX_EXTERN(__imp__sub_82187330);
@@ -73,7 +76,6 @@ struct Stats {
 };
 
 struct State {
-  u32 camera = 0;     // camera the map was last drawn for
   int sinceDrawn = 0; // frames reusing it since
   float inputs[6] = {};
   Stats stats;
@@ -113,12 +115,11 @@ bool DrawThisFrame(u32 camera, int interval) {
   float inputs[6];
   ReadInputs(camera, inputs);
   bool draw = interval <= 1 || ++g.sinceDrawn >= interval;
-  if (!draw && (camera != g.camera || MovedFar(inputs, g.inputs))) {
+  if (!draw && MovedFar(inputs, g.inputs)) {
     draw = true;
     ++g.stats.forced;
   }
   if (draw) {
-    g.camera = camera;
     g.sinceDrawn = 0;
     std::copy(inputs, inputs + 6, g.inputs);
     ++g.stats.drawn;
