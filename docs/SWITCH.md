@@ -2,8 +2,9 @@
 
 A homebrew build of re:Blue for Switch consoles running custom firmware
 (Atmosphère + Homebrew Menu). The recompiled game runs natively on the console:
-re:Blue's own renderer draws through plume on Vulkan, on the Mesa NVK driver
-linked into the NRO. **Work in progress: expect it not to boot yet.**
+re:Blue's own renderer draws through plume on deko3d, the Switch's own graphics
+API (Vulkan on Mesa NVK is still built in, `bd_switch_backend`). **Experimental:
+playable, with rough edges.** Players: see [INSTALL-SWITCH.md](INSTALL-SWITCH.md).
 
 Branch: `reblueNX`. Everything Switch-specific is listed in
 [How the port works](#how-the-port-works).
