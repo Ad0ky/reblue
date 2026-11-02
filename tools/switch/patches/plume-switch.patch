@@ -2730,10 +2730,10 @@ index 0000000..d314610
 +};
 diff --git a/plume_deko3d_commands.cpp b/plume_deko3d_commands.cpp
 new file mode 100644
-index 0000000..d6773aa
+index 0000000..5c1318a
 --- /dev/null
 +++ b/plume_deko3d_commands.cpp
-@@ -0,0 +1,1374 @@
+@@ -0,0 +1,1378 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): command lists, the queue and the swapchain (plume_deko3d.cpp has the
 +// device). docs/deko3d-renderer.md section 4 maps each plume call to deko3d.
@@ -3692,9 +3692,13 @@ index 0000000..d6773aa
 +        // banjo-nx (2026-10-18): deko3d drops the Zcull data only when another depth target is bound; a copy into the
 +        // bound one (the copy engine does not update Zcull) leaves it describing the old depth, which would cull draws
 +        // the new depth passes.
-+        if (Deko3DGetOptions().zcull && (dst->desc.flags & RenderTextureFlag::DEPTH_TARGET))
++        // re:Blue (2026-11-02): braces, as banjo-nx fixed later (renut-nx docs/deko3d-renderer.md): without them the
++        // invalidate ran after every copy into any texture, Zcull on or off, and with Zcull on it left the bound depth
++        // target's Zcull invalid for the rest of the frame.
++        if (Deko3DGetOptions().zcull && (dst->desc.flags & RenderTextureFlag::DEPTH_TARGET)) {
 +            flushBarriers();
 +            dkCmdBufBarrier(cmd, DkBarrier_None, DkInvalidateFlags_Zcull);
++        }
 +    }
 +
 +    void Deko3DCommandList::copyBuffer(const RenderBuffer *dst, const RenderBuffer *src) {

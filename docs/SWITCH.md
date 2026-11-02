@@ -207,6 +207,16 @@ What the build does already:
   distance, which `bd_shadow_distance` 2.0 brings into the map by the
   hundreds. Big casters keep their shadows at any distance. The `[shadow]
   casters` log line counts them.
+- **Water reflections reused.** `bd_reflection_update_interval` (default 2)
+  draws the plane reflections (the water's, 320x180) every Nth frame and reuses
+  them with the mirror matrix they were drawn with (`engine/reflection_cache.cpp`);
+  in water areas that pass drew 1400-1500 objects a frame. Objects smaller than
+  `bd_reflection_min_pixels` (default 3) in the reflection texture are left out
+  of it. The game log gets a `[reflection]` line every 10 s.
+- **Zcull and depth compression** (`bd_deko3d_zcull`, `bd_deko3d_depth_compression`,
+  both on): the GPU drops blocks of hidden pixels before shading them, and depth
+  targets are compressed. The Zcull invalidate after copies only runs for copies
+  into a depth target (it lacked braces, as renut-nx found in the same code).
 - **Constant dirty marks.** `D3DDevice_Set*ShaderConstantF` marks the block
   dirty without the renderer lock once it is already dirty.
 - **Pipeline cache.** `cache/vulkan_pipelines.bin` beside the NRO keeps every

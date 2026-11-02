@@ -63,6 +63,17 @@ REXCVAR_DEFINE_INT32(bd_deko3d_uam_flags, 431, "Switch",
                      "for one of the game's shaders. Each value has its own "
                      "shader cache file.")
     .range(0, 1023);
+
+REXCVAR_DEFINE_BOOL(bd_deko3d_zcull, true, "Switch",
+                    "deko3d: hierarchical depth culling (Zcull). The GPU drops "
+                    "blocks of pixels hidden behind depth already drawn before "
+                    "running their pixel shader. Set false if decals or other "
+                    "surfaces go missing in 4x8-pixel blocks. Read at start.");
+
+REXCVAR_DEFINE_BOOL(bd_deko3d_depth_compression, true, "Switch",
+                    "deko3d: depth/stencil targets with hardware compression, "
+                    "as colour targets already have: less memory traffic for "
+                    "depth tests. Read at start.");
 #endif
 
 namespace bd::platform {
@@ -195,6 +206,8 @@ void ApplySwitchClocks() {
   {
     plume::Deko3DOptions options = plume::Deko3DGetOptions();
     options.uamFlags = static_cast<unsigned>(REXCVAR_GET(bd_deko3d_uam_flags));
+    options.zcull = REXCVAR_GET(bd_deko3d_zcull);
+    options.depthCompression = REXCVAR_GET(bd_deko3d_depth_compression);
     plume::Deko3DSetOptions(options);
     // A shader whose compile does not end is written here (uam_stuck_*.glsl).
     static const std::string logs = (bd::AppRootFolder() / "logs").string();

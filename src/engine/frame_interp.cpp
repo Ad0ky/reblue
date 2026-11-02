@@ -38,6 +38,7 @@
 #include "engine/field_camera.h"
 #include "cpu/hot_calls.h"
 #include "engine/frame_clock.h"
+#include "engine/reflection_cache.h"
 #include "engine/shadow_cache.h"
 #include "engine/game.h"
 #include "engine/guest_prim.h"
@@ -2911,6 +2912,8 @@ REX_HOOK_RAW(bdSceneNodeProcessRenderCmds) {
   __imp__bdSceneNodeProcessRenderCmds(ctx, base);
 }
 
+REXCVAR_DECLARE(double, bd_reflection_min_pixels);
+
 REXCVAR_DEFINE_DOUBLE(bd_shadow_min_pixels, 4.0, "Graphics",
                       "Sun shadow casters that look smaller than this many "
                       "screen pixels across from the camera (small and far: "
@@ -2948,10 +2951,8 @@ constexpr double kPixelsPerRadian = 690.0;
 // bounding sphere (center at +20 of the shape in r3, radius at +32, the view's
 // scale at +44 of r6) moved by the world matrix in r5, as
 // bdSceneNodeCullTraverse moves it for the frustum test. Negative when unknown.
-double CasterPixels(const PPCContext &ctx, double worldRadius) {
-  float eye[3];
-  if (!bd::engine::ShadowPassEye(eye))
-    return -1.0;
+double CasterPixels(const PPCContext &ctx, double worldRadius,
+                    const float eye[3], double pixelsPerRadian) {
   const auto *m = bd::mem::try_at<be_f32>(ctx.r5.u32);
   const auto *c = bd::mem::try_at<be_f32>(ctx.r3.u32 + 20);
   if (!m || !c)
@@ -2966,7 +2967,30 @@ double CasterPixels(const PPCContext &ctx, double worldRadius) {
   const double d = std::sqrt(d2);
   if (!(d > worldRadius) || !std::isfinite(d))
     return -1.0; // the eye is inside or the numbers are off: keep it
-  return 2.0 * worldRadius / d * kPixelsPerRadian;
+  return 2.0 * worldRadius / d * pixelsPerRadian;
+}
+
+// In a plane reflection pass: objects that look smaller than
+// bd_reflection_min_pixels in the reflection texture are left out (the pass is
+// 320x180 on the Switch, and in water areas it draws 1400-1500 objects, grass
+// and small props mostly).
+bool SkipSmallReflectionObject(const PPCContext &ctx) {
+  static const double minPixels = REXCVAR_GET(bd_reflection_min_pixels);
+  const u32 height = bd::engine::ReflectionPassHeight();
+  float eye[3];
+  if (!height || minPixels <= 0.0 || !bd::engine::ReflectionPassEye(eye))
+    return false;
+  const auto *radius = bd::mem::try_at<be_f32>(ctx.r3.u32 + 32);
+  const auto *scale = bd::mem::try_at<be_f32>(ctx.r6.u32 + 44);
+  if (!radius || !scale)
+    return false;
+  const double worldRadius = double(float(*radius)) * double(float(*scale));
+  // The same field of view as the scene: height / (2 tan 27.5 degrees).
+  const double px =
+      CasterPixels(ctx, worldRadius, eye, double(height) / 1.0411);
+  const bool skip = px >= 0.0 && px < minPixels;
+  bd::engine::CountReflectionObject(skip);
+  return skip;
 }
 
 bool SkipSmallShadowCaster(const PPCContext &ctx) {
@@ -2992,7 +3016,10 @@ bool SkipSmallShadowCaster(const PPCContext &ctx) {
   bool skip = minTexels > 0.0 && 2.0 * r < minTexels;
   st.skipped += skip;
   if (!skip && minPixels > 0.0) {
-    const double px = CasterPixels(ctx, worldRadius);
+    float eye[3];
+    const double px = bd::engine::ShadowPassEye(eye)
+                          ? CasterPixels(ctx, worldRadius, eye, kPixelsPerRadian)
+                          : -1.0;
     skip = px >= 0.0 && px < minPixels;
     st.far += skip;
   }
@@ -3018,7 +3045,7 @@ bool SkipSmallShadowCaster(const PPCContext &ctx) {
 REBLUE_HOT_DECLARE(bdSceneNodeDrawSingle)
 REX_HOOK_RAW(bdSceneNodeDrawSingle) {
   BD_CPU_ZONE("bdSceneNodeDrawSingle");
-  if (SkipSmallShadowCaster(ctx))
+  if (SkipSmallShadowCaster(ctx) || SkipSmallReflectionObject(ctx))
     return;
   NodeDrawScope scope(ctx.r4.u32);
   REBLUE_HOT_CALL(bdSceneNodeDrawSingle)(ctx, base);
@@ -3026,6 +3053,10 @@ REX_HOOK_RAW(bdSceneNodeDrawSingle) {
 
 REX_EXTERN(__imp__bdBuildMirrorViewProjection);
 REX_HOOK_RAW(bdBuildMirrorViewProjection) {
+  // A reused reflection keeps the mirror matrices it was drawn with.
+  if (ctx.r5.u32 == ctx.r4.u32 + kViewObjTargetGap &&
+      bd::engine::ReflectionReuseThisFrame(ctx.r3.u32, ctx.r4.u32))
+    return;
   if (bd::engine::InterpolationActive() &&
       ctx.r5.u32 == ctx.r4.u32 + kViewObjTargetGap) {
     if (const u32 points = ServeCameraPoints(ctx.r4.u32)) {
