@@ -51,6 +51,19 @@ add_compile_definitions(REBLUE_SWITCH_DATA_ROOT="${REBLUE_SWITCH_DATA_ROOT}")
 option(REBLUE_SWITCH_LTO "Link-time optimisation (needs a lot of RAM on the build machine)" OFF)
 set(REBLUE_SWITCH_LTO_JOBS "2" CACHE STRING "Parallel LTRANS jobs for the LTO link")
 
+# Profile-guided optimisation (docs/SWITCH.md, "Profile-guided optimisation"):
+#   generate  an instrumented NRO that counts every branch of the game code and
+#             re:Blue's and writes the counts to pgo/ on the SD card
+#             (src/platform/switch/pgo_stream.cpp)
+#   use       the counts merged on the PC (tools/switch/pgo-merge.sh) into
+#             REBLUE_PGO_DIR steer the optimiser: hot code inlined and laid out
+#             together, cold code kept small
+# Both builds must use the same sources and options (apart from these flags),
+# each in its own build folder (tools/switch/build-switch.sh picks them).
+set(REBLUE_PGO "" CACHE STRING "Switch profile-guided optimisation: empty, generate or use")
+set_property(CACHE REBLUE_PGO PROPERTY STRINGS "" generate use)
+set(REBLUE_PGO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/pgo" CACHE PATH "Folder of the PGO profile (.gcda files)")
+
 # Development check build (cmake/toolchains/switch-check.cmake): compiles the
 # Switch code paths with a stock aarch64 Linux GCC and the libnx headers,
 # links nothing.

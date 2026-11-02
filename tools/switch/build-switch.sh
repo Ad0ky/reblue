@@ -16,6 +16,9 @@
 #   NVK_SDK=path       portlibs/switch folder holding mesa-switch's lib/libvulkan.a
 #                      (default: searched under $DEVKITPRO)
 #   CLEAN=1            delete the Switch build folder first
+#   PGO=generate|use   profile-guided optimisation (docs/SWITCH.md): the
+#                      instrumented NRO, or the optimised one from pgo/; each
+#                      in its own build folder
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -25,7 +28,14 @@ export DEVKITPRO
 JOBS="${JOBS:-$(nproc)}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 LTO="${LTO:-0}"
-build="$root/out/switch-build"
+PGO="${PGO:-}"
+case "$PGO" in
+    "") build="$root/out/switch-build" ;;
+    generate) build="$root/out/switch-pgo-gen" ;;
+    use) build="$root/out/switch-pgo-use"
+         ls "$root"/pgo/*.gcda >/dev/null 2>&1 || { printf 'error: PGO=use: no .gcda in pgo/ (merge the streams first)\n' >&2; exit 1; } ;;
+    *) printf 'error: PGO must be generate or use\n' >&2; exit 1 ;;
+esac
 
 log() { printf '\n==== %s ====\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -72,6 +82,7 @@ cmake -S . -B "$build" -G Ninja \
     -DDEVKITPRO="$DEVKITPRO" \
     -DREXGLUE_SWITCH_NVK_SDK="$NVK_SDK" \
     -DREBLUE_SWITCH_LTO="$([ "$LTO" = 1 ] && echo ON || echo OFF)" \
+    -DREBLUE_PGO="$PGO" -DREBLUE_PGO_DIR="$root/pgo" \
     -DREBLUE_SWITCH_GPUTEST="$([ "$GPUTEST" = 1 ] && echo ON || echo OFF)" \
     -DREBLUE_SWITCH_DEKO3D="$([ "$DEKO3D" = 1 ] && echo ON || echo OFF)"
 

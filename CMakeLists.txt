@@ -369,6 +369,36 @@ if(REBLUE_SWITCH AND NOT REBLUE_SWITCH_CHECK_ONLY)
         target_link_options(reblue PRIVATE -flto=${REBLUE_SWITCH_LTO_JOBS} -flto-partition=balanced)
         message(STATUS "reblue: LTO on the game code and re:Blue (${REBLUE_SWITCH_LTO_JOBS} jobs)")
     endif()
+    if(REBLUE_PGO)
+        get_filename_component(_pgo_dir "${REBLUE_PGO_DIR}" ABSOLUTE)
+        if(REBLUE_PGO STREQUAL "generate")
+            # Counts in the gcov_info section, written by pgo_stream.cpp; no
+            # value profiling and plain (non-atomic) updates, as the counters
+            # are shared by many threads and only need to be roughly right.
+            set(_pgo_flags "-fprofile-generate=${_pgo_dir}" "-fprofile-prefix-path=${CMAKE_BINARY_DIR}"
+                -fno-profile-values -fprofile-update=single -fprofile-info-section=gcov_info)
+            target_compile_definitions(reblue_common PRIVATE REBLUE_PGO_GENERATE=1)
+        elseif(REBLUE_PGO STREQUAL "use")
+            if(NOT EXISTS "${_pgo_dir}")
+                message(FATAL_ERROR "REBLUE_PGO=use: no profile in ${_pgo_dir} (tools/switch/pgo-merge.sh)")
+            endif()
+            # -fprofile-correction: counts lost to the non-atomic updates are
+            # smoothed over. -fprofile-partial-training: code the play did not
+            # reach is optimised as without a profile, not as cold.
+            set(_pgo_flags "-fprofile-use=${_pgo_dir}" "-fprofile-prefix-path=${CMAKE_BINARY_DIR}"
+                -fprofile-correction -fno-profile-values -fprofile-partial-training
+                -Wno-missing-profile -Wno-coverage-mismatch)
+        else()
+            message(FATAL_ERROR "REBLUE_PGO must be empty, generate or use (got ${REBLUE_PGO})")
+        endif()
+        foreach(_pgo_target reblue_recomp reblue_common reblue)
+            if(TARGET ${_pgo_target})
+                target_compile_options(${_pgo_target} PRIVATE ${_pgo_flags})
+            endif()
+        endforeach()
+        target_link_options(reblue PRIVATE ${_pgo_flags})
+        message(STATUS "reblue: PGO ${REBLUE_PGO} (${_pgo_dir})")
+    endif()
     rexglue_switch_add_nro(reblue
         NAME "${REBLUE_SWITCH_APP_TITLE}"
         AUTHOR "${REBLUE_SWITCH_APP_AUTHOR}"

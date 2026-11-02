@@ -24,7 +24,14 @@ param(
     # Also the GPU test NRO (tools/switch/gputest, docs/SWITCH-deko3d.md P0.4).
     [switch]$GpuTest,
     # Leave the deko3d back end out (NVK only). With it, bd_switch_backend picks deko3d or nvk at start.
-    [switch]$NoDeko3d
+    [switch]$NoDeko3d,
+    # Profile-guided optimisation (docs/SWITCH.md): "generate" builds the instrumented NRO, "use" the optimised one
+    # from the merged profile in pgo\. Each has its own build folder.
+    [ValidateSet("", "generate", "use")][string]$Pgo = "",
+    # Merges the instrumented NRO's counts (the .stream files from sdmc:/switch/reblue/pgo/) into pgo\ and stops.
+    [switch]$PgoMerge,
+    # The folder with the .stream files for -PgoMerge (default: pgo-streams\ in the repository).
+    [string]$PgoStreams = ""
 )
 # Continue, not Stop: Windows PowerShell 5.1 turns a native program's redirected
 # stderr line into a terminating error. Every docker call checks its exit code.
@@ -76,7 +83,23 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "Switch image: $SwitchImage"
 
+
+# ---------------------------------------------------------------- PGO merge
+if ($PgoMerge) {
+    if (-not $PgoStreams) { $PgoStreams = Join-Path $root "pgo-streams" }
+    $PgoStreams = (Resolve-Path $PgoStreams).Path
+    Write-Host "==== PGO: merging the streams in $PgoStreams into pgo\ ===="
+    Invoke-Docker @("run", "--rm", "-v", "${root}:/work", "-v", "${PgoStreams}:/streams:ro", "-w", "/work",
+        $SwitchImage, "bash", "tools/switch/pgo-merge.sh", "/streams")
+    $sessions = @(Get-ChildItem -Path $PgoStreams -Filter "reblue_pgo_*.stream").Count
+    Invoke-Docker @("run", "--rm", "-v", "${root}:/work", "-w", "/work",
+        $HostImage, "python3", "tools/switch/pgo_summary.py", "pgo", "$sessions")
+    Write-Host "Profile ready in pgo\. Build the optimised NRO with: run-switch-build.bat -Pgo use -Lto"
+    exit 0
+}
+
 $envArgs = @("-e", "BUILD_TYPE=$BuildType")
+if ($Pgo) { $envArgs += @("-e", "PGO=$Pgo") }
 if ($Jobs -gt 0) { $envArgs += @("-e", "JOBS=$Jobs") }
 if ($Clean) { $envArgs += @("-e", "CLEAN=1") }
 if ($Lto) { $envArgs += @("-e", "LTO=1") }

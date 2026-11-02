@@ -427,3 +427,7 @@ switch-build.log
 /thirdparty/rexglue-sdk/out/
 /thirdparty/rexglue-sdk/thirdparty/**
 !/thirdparty/rexglue-sdk/thirdparty/CMakeLists.txt
+
+# Profile-guided optimisation: the merged profile and the streams from the console
+/pgo/
+/pgo-streams/

@@ -223,6 +223,30 @@ What the build does already:
   Vulkan pipeline built so far (each one costs ~60 ms to build on NVK). The
   first run builds them, later runs read them. Delete the file to start over.
 
+### Profile-guided optimisation
+
+GCC can optimise the game code and re:Blue's from what actually runs: hot paths
+inlined and laid out together, cold code kept small. Three steps:
+
+1. **Instrumented NRO:** `run-switch-build.bat -Pgo generate` (build folder
+   `out\switch-pgo-gen`). Copy that `reblue.nro` to the SD card and play: the
+   areas that are slow, battles, menus, a cutscene. It runs slower than the
+   normal build. Every minute and when the game closes it writes its counts to
+   `sdmc:/switch/reblue/pgo/reblue_pgo_<N>.stream` (one file per session;
+   the game log says `[pgo] instrumented build: N objects counted`).
+2. **Merge:** copy the `pgo` folder from the SD card to `pgo-streams\` in the
+   repository and run `run-switch-build.bat -PgoMerge`. It writes one `.gcda`
+   per object into `pgo\` (`tools/switch/pgo-merge.sh`, then
+   `tools/switch/pgo_summary.py`, which fills in the summary the stream format
+   leaves at zero). Merge on the PC that built the instrumented NRO; an older
+   profile is moved to `pgo.old.<date>`.
+3. **Optimised NRO:** `run-switch-build.bat -Pgo use -Lto` (build folder
+   `out\switch-pgo-use`; LTO needs ~16 GB of RAM for Docker, leave `-Lto` out
+   without it). Functions changed since the profile lose their counts, so take a
+   new profile after large changes.
+
+Both `pgo\` and `pgo-streams\` are git-ignored.
+
 How to measure on the console:
 
 - The game log (`logs/`) gets a `[frames]` line every 10 s: fps, mean and worst

@@ -7,6 +7,10 @@
  */
 #include "core/shutdown.h"
 
+#if defined(__SWITCH__)
+#include "platform/switch/pgo_stream.h"
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -104,6 +108,9 @@ void StopGuestThreads() {
   Stage("stop-guest-threads", [] { StopGuestThreads(); });
   Stage("flush-caches", [] { gpu::FlushPSOCapture(); });
   Stage("gpu-drain", [] { gpu::Video::Shutdown(UiPump()); });
+#if defined(__SWITCH__)
+  Stage("pgo-counts", [] { bd::platform::PgoStop(); });
+#endif
 
   g_finished.store(true, std::memory_order_release);
   BD_INFO("[shutdown] complete, exiting {}", exit_code);
