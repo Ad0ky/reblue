@@ -95,7 +95,7 @@ The `reblue.toml` in this release has the settings recommended for the Switch:
 bd_scene_color_r11g11b10 = true   # lighter scene color format (if glows or transparency look wrong, set false)
 input_xbox_layout = false         # face buttons by letter (Switch A = Xbox A)
 bd_shadow_distance = 2.0          # shadows reach twice as far (less pop-in); 1.0 = the Switch default
-bd_shadow_update_interval = 2     # shadow map redrawn every 2nd frame; 3 = faster, 1 = every frame
+bd_shadow_update_interval = 1     # shadow map redrawn every frame; 2 = every 2nd frame (faster)
 bd_shadow_min_pixels = 4.0        # skip shadows of objects smaller than 4 pixels on screen (0 = all)
 bd_interp_min_fps = 36            # below this, no frame smoothing and a 30 fps cap
 bd_opt_audio_hints = 0            # the game's Audio Hints: no spoken "Playable", "Checkpoint"...
@@ -106,7 +106,7 @@ What the speed-related options do:
 | Option | Default | Effect |
 |---|---|---|
 | `bd_shadow_distance` | 1.0 | How far sun shadows reach. 2.0 removes most of the shadow pop-in and costs some speed in busy areas. |
-| `bd_shadow_update_interval` | 2 | The sun shadow map is redrawn every Nth frame and reused in between. Shadows of moving characters can trail by up to N-1 frames. |
+| `bd_shadow_update_interval` | 1 | The sun shadow map is redrawn every Nth frame and reused in between. 2 or more is faster, but shadows on and of moving characters can flicker or trail by up to N-1 frames. |
 | `bd_shadow_min_pixels` | 4.0 | Objects that look smaller than this on screen (distant grass, bushes, posts) cast no shadow. Lower it if mid-sized shadows go missing. |
 | `bd_interp_min_fps` | 36 | Above 30 fps the game smooths motion between its 30 Hz updates. When the console can't keep this rate, smoothing turns off and the game holds 30 fps. |
 | `bd_opt_audio_hints` | 1 | The game's Audio Hints (the same option as in the Settings menu): spoken and on-screen notices such as "Playable", "Checkpoint" or an enemy spotting you. |
@@ -124,7 +124,7 @@ rebuilt on the next start.
 | It closes right after starting, or says there is not enough memory | Start it through title takeover (hold **R** on a game), not from the Album. |
 | It stops at start or never gets past a black screen | Check that `default.xex` is directly in `sdmc:/switch/reblue/game/`, not in a subfolder, and that the whole game folder was copied. |
 | A voice says "Playable", "Checkpoint"... | That is the game's Audio Hints option: turn it off in Settings or set `bd_opt_audio_hints = 0`. |
-| Shadows flicker or jump | Set `bd_shadow_update_interval = 1` and report it with your logs. |
+| Shadows flicker or jump | Check that `bd_shadow_update_interval` is 1 and report it with your logs. |
 | Glows or transparent effects look wrong | Set `bd_scene_color_r11g11b10 = false`. |
 | Some objects lose their shadow | Lower `bd_shadow_min_pixels` (for example to 2) or set it to 0. |
 

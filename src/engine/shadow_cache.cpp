@@ -21,7 +21,7 @@
 #include "core/profiling.h"
 #include "engine/shadow_cache.h"
 
-REXCVAR_DEFINE_INT32(bd_shadow_update_interval, 2, "Graphics",
+REXCVAR_DEFINE_INT32(bd_shadow_update_interval, 1, "Graphics",
                      "The sun shadow map is drawn every this many frames and "
                      "reused in between (its light matrix with it, so static "
                      "shadows stay put; moving ones trail by up to N-1 "

@@ -194,7 +194,7 @@ What the build does already:
   footprint with four loads. `shadowCmp2D` (`xenosrecomp-switch.patch`,
   `shader_common.h`) reads it with one gather at the footprint's center, and
   falls back to the clamped loads only where the footprint leaves the map.
-- **Sun shadow map reuse.** `bd_shadow_update_interval` (default 2) draws the
+- **Sun shadow map reuse.** `bd_shadow_update_interval` (default 1, off) draws the
   sun shadow map every Nth frame and reuses it in between, with the light
   matrix it was drawn with (`engine/shadow_cache.cpp`). The shadow pass is
   about 3000 of the 4000 draws of a busy field frame. Static shadows stay put;
