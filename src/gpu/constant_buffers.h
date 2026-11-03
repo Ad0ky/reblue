@@ -21,6 +21,8 @@
 
 namespace bd::gpu {
 
+struct GuestDrawState;
+
 struct GuestShader;
 
 // Mirror of the SharedConstants cbuffer (b2, space4). Layout matches the
@@ -92,7 +94,8 @@ u32 FloatConstantBytes(const GuestShader *shader);
 // constants come from unhooked recompiled code, so there is no dirty signal.
 // size == 0 means byte-identical to what is already bound on this command list
 // and the caller can skip the upload + root rebind.
-ConstantAllocation UploadSharedConstants(u32 device_guest);
+ConstantAllocation UploadSharedConstants(u32 device_guest,
+                                         const GuestDrawState &guest);
 
 // Root bindings do not survive begin(), so this drops the 'shared CB still
 // bound' reuse gate. Call on every command list reset.
@@ -140,7 +143,10 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
 // The shared block (texture and sampler indices, bool constants...) kept in
 // place too: built from the live state, its changed registers pushed, bound at
 // slot 2. False if not done (the caller uploads it as before).
-bool PushDeltaShared(plume::RenderCommandList *list, u32 device_guest);
+// The guest inputs (fetch and bool constants) come from 'guest', read when the
+// draw was issued (CaptureGuestDrawState).
+bool PushDeltaShared(plume::RenderCommandList *list, u32 device_guest,
+                     const GuestDrawState &guest);
 // Binds the two in-place banks and, if it has memory, the shared block.
 void BindDeltaConstants(plume::RenderCommandList *list,
                         const ConstantAllocation &shared);

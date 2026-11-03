@@ -897,16 +897,18 @@ void BindDeltaConstants(plume::RenderCommandList *list,
 }
 
 namespace {
-void BuildSharedConstants(UploadState &s, u32 device_guest);
+void BuildSharedConstants(UploadState &s, u32 device_guest,
+                          const GuestDrawState &guest);
 } // namespace
 
-bool PushDeltaShared(plume::RenderCommandList *list, u32 device_guest) {
+bool PushDeltaShared(plume::RenderCommandList *list, u32 device_guest,
+                     const GuestDrawState &guest) {
 #if defined(PLUME_DEKO3D)
   BD_CPU_ZONE("PushDeltaShared");
   auto &s = upload_state();
   if (!s.ready || !list || !EnsureDeltaBuffer(s))
     return false;
-  BuildSharedConstants(s, device_guest);
+  BuildSharedConstants(s, device_guest, guest);
   const u64 base = s.deltaGpu + 2ull * kConstantBlockBytes;
   const auto *now = reinterpret_cast<const u8 *>(&s.shared);
   auto *held = reinterpret_cast<u8 *>(&s.deltaShared);
@@ -945,6 +947,7 @@ bool PushDeltaShared(plume::RenderCommandList *list, u32 device_guest) {
 #else
   (void)list;
   (void)device_guest;
+  (void)guest;
   return false;
 #endif
 }
@@ -966,7 +969,8 @@ void DeltaConstantStats(u64 &draws, u64 &updates, u64 &bytes, u64 &regs,
 namespace {
 
 // s.shared from the live guest and renderer state.
-void BuildSharedConstants(UploadState &s, u32 device_guest) {
+void BuildSharedConstants(UploadState &s, u32 device_guest,
+                          const GuestDrawState &guest) {
   // bd_anisotropy participates in DecodeFromFetch's output, so a live change
   // must miss the per-slot cache so stale sampler indices are re-resolved.
   const i32 aniso_now = Settings::Get().Anisotropy();
@@ -978,7 +982,8 @@ void BuildSharedConstants(UploadState &s, u32 device_guest) {
   // hardware it does not rebuild the fetch constant), so vs.textures holds the
   // last real texture per slot, exactly what the GPU would still be sampling.
   auto &vs = bd::gpu::state();
-  const auto *device_p = bd::mem::at<const D3DDevice>(device_guest);
+  // Fetch and bool constants: the copy taken when the draw was issued.
+  const bool have_device = guest.device;
   for (u32 i = 0; i < 16; ++i) {
     s.shared.samplerIndices[i] = 0;
     s.shared.texture2DIndices[i] = bd::gpu::kNullTexture2DDescriptorIndex;
@@ -1025,8 +1030,8 @@ void BuildSharedConstants(UploadState &s, u32 device_guest) {
       // X360 stores sampler state in fetchConstants[N].dword[*]. The
       // SetSamplerState_* setters are unhooked and run their recompiled bodies,
       // so the address mode bits there are valid.
-      if (device_p) {
-        const auto &fc_be = device_p->fetchConstants[i];
+      if (have_device) {
+        const auto &fc_be = guest.fetchRaw[i];
         const bool clamp3d =
             tex->viewDimension == plume::RenderTextureViewDimension::TEXTURE_3D;
         auto &sc = s.samplerSlots[i];
@@ -1034,9 +1039,12 @@ void BuildSharedConstants(UploadState &s, u32 device_guest) {
             std::memcmp(sc.fc, &fc_be, sizeof(sc.fc)) == 0) {
           s.shared.samplerIndices[i] = sc.sampler;
         } else {
+          // fetchRaw holds the words as stored (big-endian).
+          DeviceFetchConstant stored;
+          std::memcpy(&stored, fc_be, sizeof(stored));
           const u32 fc[6] = {
-              u32(fc_be.dword[0]), u32(fc_be.dword[1]), u32(fc_be.dword[2]),
-              u32(fc_be.dword[3]), u32(fc_be.dword[4]), u32(fc_be.dword[5]),
+              u32(stored.dword[0]), u32(stored.dword[1]), u32(stored.dword[2]),
+              u32(stored.dword[3]), u32(stored.dword[4]), u32(stored.dword[5]),
           };
           auto desc = DecodeFromFetch(fc);
 
@@ -1062,11 +1070,9 @@ void BuildSharedConstants(UploadState &s, u32 device_guest) {
   // dwords each. Shaders branch on BOOL_BIT(n) of a 256-bit register file
   // (VS 0..127, PS 128..255).
   if (device_guest) {
-    const auto *device = bd::mem::at<const D3DDevice>(device_guest);
     for (u32 i = 0; i < 4; ++i) {
-      s.shared.booleansArr[i] = device ? u32(device->vsBoolConstants[i]) : 0u;
-      s.shared.booleansArr[4 + i] =
-          device ? u32(device->psBoolConstants[i]) : 0u;
+      s.shared.booleansArr[i] = have_device ? guest.vsBool[i] : 0u;
+      s.shared.booleansArr[4 + i] = have_device ? guest.psBool[i] : 0u;
     }
   }
 
@@ -1101,12 +1107,13 @@ void BuildSharedConstants(UploadState &s, u32 device_guest) {
 
 } // namespace
 
-ConstantAllocation UploadSharedConstants(u32 device_guest) {
+ConstantAllocation UploadSharedConstants(u32 device_guest,
+                                         const GuestDrawState &guest) {
   BD_CPU_ZONE("UploadSharedConstants");
   auto &s = upload_state();
   if (!s.ready)
     return {};
-  BuildSharedConstants(s, device_guest);
+  BuildSharedConstants(s, device_guest, guest);
   // Byte-identical to the block already bound on this command list: the live
   // CBV is still correct, skip the upload and let the caller skip the rebind.
   // SharedConstants padding is zero-initialized and never written, so memcmp

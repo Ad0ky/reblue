@@ -11,6 +11,7 @@
 #include "gpu/frame.h"
 
 #include <cstddef>
+#include <cstring>
 #include <mutex>
 
 #include <plume_render_interface.h>
@@ -154,6 +155,12 @@ void CaptureGuestDrawState(u32 device_guest, GuestDrawState &g) {
   g.device = true;
   g.blendControl = dev->rbBlendControl0;
   g.colorControl = dev->rbColorControl;
+  static_assert(sizeof(g.fetchRaw) == 16 * sizeof(DeviceFetchConstant));
+  std::memcpy(g.fetchRaw, dev->fetchConstants, sizeof(g.fetchRaw));
+  for (u32 i = 0; i < 4; ++i) {
+    g.vsBool[i] = u32(dev->vsBoolConstants[i]);
+    g.psBool[i] = u32(dev->psBoolConstants[i]);
+  }
   const auto *rs = bd::mem::at<const BdRenderStateCache>(kRenderStateCacheVa);
   if (!rs)
     return;
@@ -225,13 +232,12 @@ bool Video::FlushRenderStateLocked(u32 device_guest,
   // alpha enable bit. BD inlines its render state writes at LTCG-eligible sites
   // and routes the rest through bdSetRenderState's dispatch table, so the
   // register shadow merges both.
-  if (captured) {
-    ApplyGuestDrawState(s, *captured);
-  } else {
-    GuestDrawState now;
+  GuestDrawState now;
+  if (!captured) {
     CaptureGuestDrawState(device_guest, now);
-    ApplyGuestDrawState(s, now);
+    captured = &now;
   }
+  ApplyGuestDrawState(s, *captured);
 
   // Anything missing here means the engine has not wired the pipeline up yet.
   if (!s.pipelineState.vertexShader || !s.pipelineState.vertexDeclaration) {
@@ -293,10 +299,10 @@ bool Video::FlushRenderStateLocked(u32 device_guest,
                        FloatConstantBytes(s.pipelineState.vertexShader));
     PushDeltaConstants(s.command_list, kPixelBank, device_guest,
                        FloatConstantBytes(s.pipelineState.pixelShader));
-    if (PushDeltaShared(s.command_list, device_guest)) {
+    if (PushDeltaShared(s.command_list, device_guest, *captured)) {
       BindDeltaConstants(s.command_list, ConstantAllocation{});
     } else {
-      auto sc_alloc = UploadSharedConstants(device_guest);
+      auto sc_alloc = UploadSharedConstants(device_guest, *captured);
       BindDeltaConstants(s.command_list, sc_alloc);
     }
   } else
@@ -341,7 +347,7 @@ bool Video::FlushRenderStateLocked(u32 device_guest,
     // fetch constants are written by unhooked recompiled code, so there is no
     // dirty signal. The upload is skipped internally when the built block is
     // byte-identical to the one already bound on this list.
-    auto sc_alloc = UploadSharedConstants(device_guest);
+    auto sc_alloc = UploadSharedConstants(device_guest, *captured);
     if (sc_alloc.size) {
 #if defined(REBLUE_D3D12)
       s.command_list->setGraphicsRootDescriptor(sc_alloc.ref, 2);

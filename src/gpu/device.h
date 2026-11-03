@@ -238,6 +238,11 @@ struct GuestDrawState {
   u32 stencilEnable = 0, twoSidedStencilMode = 0, stencilFail = 0,
       stencilZFail = 0, stencilPass = 0, stencilFunc = 0, stencilRef = 0,
       stencilMask = 0, stencilWriteMask = 0, colorWriteEnable = 0;
+  // The shared constant block's guest inputs (stage 1b): the first 16 fetch
+  // constants as stored (6 big-endian dwords each, the sampler state) and the
+  // VS / PS bool constants. Read with the device registers above.
+  u32 fetchRaw[16][6] = {};
+  u32 vsBool[4] = {}, psBool[4] = {};
 };
 void CaptureGuestDrawState(u32 device_guest, GuestDrawState &out);
 
