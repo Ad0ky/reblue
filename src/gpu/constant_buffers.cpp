@@ -893,19 +893,36 @@ void ConstantsWritten(ConstantBank bank, u32 device_guest, u32 start,
     MarkConstantRegisters(bank, start, count);
     return;
   }
-  // What the capture compares with: these registers are sent, so its sampled
-  // check must not take them for writes without a setter.
-  std::memcpy(g_capture.raw[bank] + start * 16, guest, count * 16);
-  rq::RunBytes(guest, count * 16, [bank, start](const u8 *data, u32 size) {
-    auto &s = upload_state();
-    u8 *mirror = s.deltaMirror[bank];
-    const u32 n = size / 16;
-    for (u32 i = 0; i < n; ++i) {
-      const u32 r = start + i;
-      CopyRegister(mirror + r * 16, data + i * 16);
-      s.deltaPending[bank][r / 64] |= 1ull << (r % 64);
+  // Only the runs of registers that differ from what was last sent (the game
+  // sets many to the values they already hold): each run is one record. The
+  // capture's copy (what it compares with, and what was sent) takes them too,
+  // so its sampled check does not take them for writes without a setter.
+  u8 *raw = g_capture.raw[bank] + start * 16;
+  u32 i = 0;
+  while (i < count) {
+    if (SameRegister(guest + i * 16, raw + i * 16)) {
+      ++i;
+      continue;
     }
-  });
+    u32 end = i + 1;
+    while (end < count && !SameRegister(guest + end * 16, raw + end * 16))
+      ++end;
+    const u32 run_bytes = (end - i) * 16;
+    std::memcpy(raw + i * 16, guest + i * 16, run_bytes);
+    const u32 first = start + i;
+    rq::RunBytes(guest + i * 16, run_bytes,
+                 [bank, first](const u8 *data, u32 size) {
+                   auto &s = upload_state();
+                   u8 *mirror = s.deltaMirror[bank];
+                   const u32 n = size / 16;
+                   for (u32 k = 0; k < n; ++k) {
+                     const u32 r = first + k;
+                     CopyRegister(mirror + r * 16, data + k * 16);
+                     s.deltaPending[bank][r / 64] |= 1ull << (r % 64);
+                   }
+                 });
+    i = end;
+  }
 #else
   MarkConstantRegisters(bank, start, count);
   (void)device_guest;

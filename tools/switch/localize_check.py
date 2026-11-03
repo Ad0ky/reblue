@@ -152,6 +152,32 @@ VOLATILE_MEM = r'''
 
 PLAIN_MEM = VOLATILE_MEM.replace('volatile ', '')
 
+# The merged stvlx / stvrx of the copies (hot_natives.cpp has the same).
+PARTIAL_STORES = r'''
+#include <cstring>
+// stvlx / stvrx (localize.py merges their byte loops into these): the bytes
+// of the vector from ea up to the end of its 16-byte block, and the bytes
+// before ea back to the start of its block, in guest (big-endian) order.
+// The vector is held reversed (u8[15] is the guest's first byte).
+#define REBLUE_STVLX(ea, v) reblue_stvlx(base, (ea), (v))
+#define REBLUE_STVRX(ea, v) reblue_stvrx(base, (ea), (v))
+static inline void reblue_stvlx(u8 *base, u32 ea, const u8 *v) {
+  u8 be[16];
+  for (int i = 0; i < 16; ++i)
+    be[i] = v[15 - i];
+  std::memcpy(base + ea, be, 16 - (ea & 0xF));
+}
+static inline void reblue_stvrx(u8 *base, u32 ea, const u8 *v) {
+  const u32 n = ea & 0xF;
+  if (!n)
+    return;
+  u8 be[16];
+  for (int i = 0; i < 16; ++i)
+    be[i] = v[15 - i];
+  std::memcpy(base + (ea - n), be + 16 - n, n);
+}
+'''
+
 DRIVER = r'''
 static const size_t kMem = 0x100000000ull;
 static unsigned char *g_maps[2];
@@ -350,7 +376,7 @@ def main():
                .replace('{VLIST128B}', '{' + ', '.join(f'&b.v{i}' for i in range(128)) + '}')
                .replace('{VLIST20}', '{' + ', '.join(f'&c.v{i}' for i in range(20)) + '}'))
     driver = DRIVER.replace('{VLIST128}', '{' + v128 + '}')
-    src = [prelude] + stubs + hooks + [VOLATILE_MEM] + origs + [PLAIN_MEM] + copies
+    src = [prelude] + stubs + hooks + [VOLATILE_MEM] + origs + [PLAIN_MEM, PARTIAL_STORES] + copies
     src.append('struct T { const char *name; Fn o, n; };\ntypedef void (*Fn)(PPCContext &, uint8_t *);')
     src = '\n'.join(src)
     src = src.replace('struct T { const char *name; Fn o, n; };\ntypedef void (*Fn)(PPCContext &, uint8_t *);', '')

@@ -96,7 +96,38 @@ def reg_key(r):
     return ({'r': 0, 'f': 1, 'v': 2}[r[0]], int(r[1:]))
 
 
+STVLX_FOR = re.compile(r'^(\s*)for \(size_t i = 0; i < \(16 - \(ea & 0xF\)\); i\+\+\)\s*$')
+STVLX_BODY = re.compile(r'^\s*REX_STORE_U8\(ea \+ i, (\S+)\.u8\[15 - i\]\);\s*$')
+STVRX_FOR = re.compile(r'^(\s*)for \(size_t i = 0; i < \(ea & 0xF\); i\+\+\)\s*$')
+STVRX_BODY = re.compile(r'^\s*REX_STORE_U8\(ea - i - 1, (\S+)\.u8\[i\]\);\s*$')
+
+
+def merge_partial_stores(body):
+    """stvlx / stvrx are a byte loop in the recompiled code (a store and a
+    bound check per byte, ~20% of bdSceneNodeDrawSingle on the console): one
+    call each, which stores the same bytes at the same addresses
+    (REBLUE_STVLX / REBLUE_STVRX in hot_natives.cpp)."""
+    out, i = [], 0
+    while i < len(body):
+        line = body[i]
+        nxt = body[i + 1] if i + 1 < len(body) else ''
+        m, b = STVLX_FOR.match(line), STVLX_BODY.match(nxt)
+        if m and b:
+            out.append(f'{m.group(1)}REBLUE_STVLX(ea, {b.group(1)}.u8);')
+            i += 2
+            continue
+        m, b = STVRX_FOR.match(line), STVRX_BODY.match(nxt)
+        if m and b:
+            out.append(f'{m.group(1)}REBLUE_STVRX(ea, {b.group(1)}.u8);')
+            i += 2
+            continue
+        out.append(line)
+        i += 1
+    return out
+
+
 def localize(name, body):
+    body = merge_partial_stores(body)
     text = '\n'.join(body)
     for bad, why in (('reserved', 'a reservation (lwarx/stwcx.)'), ('setjmp', 'setjmp'),
                      ('longjmp', 'longjmp'), ('ctx.lr', 'the link register')):

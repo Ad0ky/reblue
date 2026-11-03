@@ -261,6 +261,16 @@ Thread in slow scenes) as native code with the recompiled function's
 arithmetic. On its first call it compares itself with the recompiled function
 over 80000 angles, bit for bit, and stays off if any result differs (the
 stderr log says which). `bd_native_sincos = false` turns it off.
+`engine/anim_curve.cpp` does the same for the animation curve key search
+(`sub_8272EB40`, a linear scan over a curve's keys, ~13% of the Main Thread):
+its first 50000 calls also run the recompiled function and compare every
+register and word it leaves; it stays off on any difference
+(`bd_native_anim_curve`).
+
+The localized copies (`tools/switch/localize.py`) store `stvlx`/`stvrx` with
+one call each instead of the recompiled byte loop (a store and a bound check
+per byte): 248 of them in the hot functions, 80 in
+`CharaVO__BuildBoneMatrices` alone, ~20% of `bdSceneNodeDrawSingle`.
 
 ### Profile-guided optimisation
 

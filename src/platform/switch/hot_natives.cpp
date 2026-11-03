@@ -16,6 +16,7 @@
 #include "reblue_pch.h"
 
 #include <cstdio>
+#include <cstring>
 
 #include <rex/cvar.h>
 
@@ -61,6 +62,27 @@ bool NativesOn() {
 #define REX_STORE_U16(x, y) (*(u16 *)(base + (u32)(x)) = __builtin_bswap16(y))
 #define REX_STORE_U32(x, y) (*(u32 *)(base + (u32)(x)) = __builtin_bswap32(y))
 #define REX_STORE_U64(x, y) (*(u64 *)(base + (u32)(x)) = __builtin_bswap64(y))
+// stvlx / stvrx (localize.py merges their byte loops into these): the bytes
+// of the vector from ea up to the end of its 16-byte block, and the bytes
+// before ea back to the start of its block, in guest (big-endian) order.
+// The vector is held reversed (u8[15] is the guest's first byte).
+#define REBLUE_STVLX(ea, v) reblue_stvlx(base, (ea), (v))
+#define REBLUE_STVRX(ea, v) reblue_stvrx(base, (ea), (v))
+static inline void reblue_stvlx(u8 *base, u32 ea, const u8 *v) {
+  u8 be[16];
+  for (int i = 0; i < 16; ++i)
+    be[i] = v[15 - i];
+  std::memcpy(base + ea, be, 16 - (ea & 0xF));
+}
+static inline void reblue_stvrx(u8 *base, u32 ea, const u8 *v) {
+  const u32 n = ea & 0xF;
+  if (!n)
+    return;
+  u8 be[16];
+  for (int i = 0; i < 16; ++i)
+    be[i] = v[15 - i];
+  std::memcpy(base + (ea - n), be + 16 - n, n);
+}
 #define REBLUE_LOOP_BARRIER() __asm__ __volatile__("" ::: "memory")
 #define REBLUE_FP_FENCE() __asm__ __volatile__("" ::: "memory")
 
