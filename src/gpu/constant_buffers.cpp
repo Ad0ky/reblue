@@ -762,20 +762,20 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
   if (pinCheck)
     want[0] |= 1ull << 50;
 
-  u8 *shadow = s.deltaShadow[bank];
-  u8 *rawShadow = s.deltaRaw[bank];
-  const u64 base = s.deltaGpu + u64(bank) * kConstantBlockBytes;
-  u32 pushed = 0, looked = 0;
-  u32 runStart = 0, runEnd = 0; // [start, end) registers, end 0 = no run
-  auto flush = [&] {
-    if (!runEnd)
-      return;
-    const u32 off = runStart * 16, len = (runEnd - runStart) * 16;
-    plume::Deko3DPushUniform(list, base, kConstantBlockBytes, off,
-                             shadow + off, len);
-    pushed += len;
-    runEnd = 0;
+  // Stage 1 of the render thread plan (docs/SWITCH.md): the registers are
+  // read from the guest in one pass (capture: the ones that may have changed,
+  // as the guest has them now) and lowered and pushed in a second (apply),
+  // which reads only the capture. Recorded on another thread later, the apply
+  // half must not look at the guest's registers, which the game keeps writing.
+  struct Captured {
+    u16 reg;
+    bool marked;
   };
+  Captured entries[kConstantRegisterCount];
+  alignas(16) u8 values[kConstantRegisterCount][16];
+  u32 count = 0;
+  u8 *rawShadow = s.deltaRaw[bank];
+  u32 looked = 0;
   for (u32 r = 0; r < regs; ++r) {
     const bool marked = (want[r / 64] >> (r % 64)) & 1u;
     if (!marked && !verify) {
@@ -786,10 +786,7 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
         rest = want[w];
       if (!rest)
         break;
-      const u32 next = w * 64 + u32(__builtin_ctzll(rest));
-      if (runEnd && next > runEnd + 2)
-        flush();
-      r = next - 1;
+      r = w * 64 + u32(__builtin_ctzll(rest)) - 1;
       continue;
     }
     ++looked;
@@ -797,8 +794,34 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
     if (r < known && !(pinCheck && r == 50) && SameRegister(gr, rawShadow + r * 16))
       continue;
     std::memcpy(rawShadow + r * 16, gr, 16);
+    entries[count] = {u16(r), marked};
+    std::memcpy(values[count], gr, 16);
+    ++count;
+  }
+
+  // Apply: lowered to the GPU's form, compared with what the GPU copy holds,
+  // and pushed in runs (gaps of up to two unchanged registers are pushed
+  // along, one push instead of two).
+  u8 *shadow = s.deltaShadow[bank];
+  const u64 base = s.deltaGpu + u64(bank) * kConstantBlockBytes;
+  u32 pushed = 0;
+  u32 runStart = 0, runEnd = 0; // [start, end) registers, end 0 = no run
+  auto flush = [&] {
+    if (!runEnd)
+      return;
+    const u32 off = runStart * 16, len = (runEnd - runStart) * 16;
+    plume::Deko3DPushUniform(list, base, kConstantBlockBytes, off,
+                             shadow + off, len);
+    pushed += len;
+    runEnd = 0;
+  };
+  for (u32 i = 0; i < count; ++i) {
+    const u32 r = entries[i].reg;
+    const bool marked = entries[i].marked;
+    if (runEnd && r > runEnd + 2)
+      flush();
     alignas(16) u8 v[16];
-    LoadGuestRegister(v, gr);
+    LoadGuestRegister(v, values[i]);
     if (pinUv && r == 50) {
       const float half = 0.5f;
       std::memcpy(v, &half, 4);

@@ -72,18 +72,13 @@ static_assert(offsetof(BdRenderStateCache, stencilMask) == 136);
 static_assert(offsetof(BdRenderStateCache, stencilWriteMask) == 140);
 static_assert(offsetof(BdRenderStateCache, colorWriteEnable) == 212);
 
-// Blend state comes from the Xenos register shadow, where the guest SDK folds
-// AlphaBlendEnable and friends together across many call sites.
-// RB_BLENDCONTROL0: COLOR_SRCBLEND[4:0] COLOR_COMB_FCN[7:5]
-// COLOR_DESTBLEND[12:8] ALPHA_SRCBLEND[20:16] ALPHA_COMB_FCN[23:21]
-// ALPHA_DESTBLEND[28:24], raw D3DBLEND/D3DBLENDOP. RB_COLORCONTROL bit 31 is
-// the alpha master enable.
-void ReadDeviceRenderState(VideoState &s, u32 device_guest) {
-  const auto *dev = bd::mem::at<const D3DDevice>(device_guest);
-  if (!dev)
+// The captured guest render state (CaptureGuestDrawState, below) into the
+// pipeline state the PSO lookup reads.
+void ApplyGuestDrawState(VideoState &s, const GuestDrawState &g) {
+  if (!g.device)
     return;
-  const u32 blend = dev->rbBlendControl0;
-  const u32 color_control = dev->rbColorControl;
+  const u32 blend = g.blendControl;
+  const u32 color_control = g.colorControl;
 
   bool &dirty = s.dirtyStates.pipelineState;
   PipelineState &ps = s.pipelineState;
@@ -103,56 +98,90 @@ void ReadDeviceRenderState(VideoState &s, u32 device_guest) {
 
   // Depth/cull/fill/color-write come from BD's own render state cache, not the
   // register shadow, whose enable bits BD suppresses behind regs[3046]==0.
-  const auto *rs = bd::mem::at<const BdRenderStateCache>(kRenderStateCacheVa);
-  if (rs) {
-    Video::SetDirtyValue(dirty, ps.zEnable, rs->zEnable != 0u);
+  if (g.cache) {
+    Video::SetDirtyValue(dirty, ps.zEnable, g.zEnable != 0u);
     // bdEngineInit seeds the cache from device getters reblue never fills, so
     // an unwritten slot reads 0 rather than its runtime default, and ZFUNC 0 is
     // D3DCMP_NEVER. Take the X360 defaults for the depth pair until it is set.
-    const u32 z_func = rs->zFunc;
+    const u32 z_func = g.zFunc;
     Video::SetDirtyValue(dirty, ps.zFunc,
                          z_func ? ConvertCompareFunc(z_func)
                                 : plume::RenderComparisonFunction::LESS_EQUAL);
     Video::SetDirtyValue(dirty, ps.zWriteEnable,
-                         z_func == 0u || rs->zWriteEnable != 0u);
-    Video::SetDirtyValue(dirty, ps.cullMode, ConvertCullMode(rs->cullMode));
+                         z_func == 0u || g.zWriteEnable != 0u);
+    Video::SetDirtyValue(dirty, ps.cullMode, ConvertCullMode(g.cullMode));
     // The debug wireframe toggle (Shift+F3) and the Visual prim recorder both
     // reach the host only here: they bracket their draws in
     // bdSetRenderState(D3DRS_FILLMODE) with no other host-visible signal.
-    Video::SetDirtyValue(dirty, ps.fillMode, ConvertFillMode(rs->fillMode));
-    Video::SetDirtyValue(dirty, ps.colorWriteEnable,
-                         rs->colorWriteEnable & 0xFu);
+    Video::SetDirtyValue(dirty, ps.fillMode, ConvertFillMode(g.fillMode));
+    Video::SetDirtyValue(dirty, ps.colorWriteEnable, g.colorWriteEnable & 0xFu);
 
-    auto mask_or_default = [](be_u32 v) -> u8 {
+    auto mask_or_default = [](u32 v) -> u8 {
       return v ? static_cast<u8>(v & 0xFFu) : 0xFFu;
     };
-    Video::SetDirtyValue(dirty, ps.stencilEnable, rs->stencilEnable != 0u);
+    Video::SetDirtyValue(dirty, ps.stencilEnable, g.stencilEnable != 0u);
     Video::SetDirtyValue(dirty, ps.stencilTwoSided,
-                         rs->twoSidedStencilMode != 0u);
+                         g.twoSidedStencilMode != 0u);
     Video::SetDirtyValue(dirty, ps.stencilFail,
-                         ConvertStencilOp(rs->stencilFail));
+                         ConvertStencilOp(g.stencilFail));
     Video::SetDirtyValue(dirty, ps.stencilZFail,
-                         ConvertStencilOp(rs->stencilZFail));
+                         ConvertStencilOp(g.stencilZFail));
     Video::SetDirtyValue(dirty, ps.stencilPass,
-                         ConvertStencilOp(rs->stencilPass));
+                         ConvertStencilOp(g.stencilPass));
     Video::SetDirtyValue(dirty, ps.stencilFunc,
-                         ConvertCompareFunc(rs->stencilFunc));
+                         ConvertCompareFunc(g.stencilFunc));
     Video::SetDirtyValue(dirty, ps.stencilRef,
-                         static_cast<u8>(rs->stencilRef & 0xFFu));
+                         static_cast<u8>(g.stencilRef & 0xFFu));
     Video::SetDirtyValue(dirty, ps.stencilMask,
-                         mask_or_default(rs->stencilMask));
+                         mask_or_default(g.stencilMask));
     Video::SetDirtyValue(dirty, ps.stencilWriteMask,
-                         mask_or_default(rs->stencilWriteMask));
+                         mask_or_default(g.stencilWriteMask));
   }
 }
 } // namespace
+
+// Blend state comes from the Xenos register shadow, where the guest SDK folds
+// AlphaBlendEnable and friends together across many call sites.
+// RB_BLENDCONTROL0: COLOR_SRCBLEND[4:0] COLOR_COMB_FCN[7:5]
+// COLOR_DESTBLEND[12:8] ALPHA_SRCBLEND[20:16] ALPHA_COMB_FCN[23:21]
+// ALPHA_DESTBLEND[28:24], raw D3DBLEND/D3DBLENDOP. RB_COLORCONTROL bit 31 is
+// the alpha master enable.
+void CaptureGuestDrawState(u32 device_guest, GuestDrawState &g) {
+  g = GuestDrawState{};
+  const auto *dev = bd::mem::at<const D3DDevice>(device_guest);
+  if (!dev)
+    return;
+  g.device = true;
+  g.blendControl = dev->rbBlendControl0;
+  g.colorControl = dev->rbColorControl;
+  const auto *rs = bd::mem::at<const BdRenderStateCache>(kRenderStateCacheVa);
+  if (!rs)
+    return;
+  g.cache = true;
+  g.zEnable = rs->zEnable;
+  g.zFunc = rs->zFunc;
+  g.zWriteEnable = rs->zWriteEnable;
+  g.fillMode = rs->fillMode;
+  g.cullMode = rs->cullMode;
+  g.stencilEnable = rs->stencilEnable;
+  g.twoSidedStencilMode = rs->twoSidedStencilMode;
+  g.stencilFail = rs->stencilFail;
+  g.stencilZFail = rs->stencilZFail;
+  g.stencilPass = rs->stencilPass;
+  g.stencilFunc = rs->stencilFunc;
+  g.stencilRef = rs->stencilRef;
+  g.stencilMask = rs->stencilMask;
+  g.stencilWriteMask = rs->stencilWriteMask;
+  g.colorWriteEnable = rs->colorWriteEnable;
+}
 
 bool Video::FlushRenderState(u32 device_guest) {
   std::lock_guard lock(state().mutex);
   return FlushRenderStateLocked(device_guest);
 }
 
-bool Video::FlushRenderStateLocked(u32 device_guest) {
+bool Video::FlushRenderStateLocked(u32 device_guest,
+                                   const GuestDrawState *captured) {
   auto &s = state();
   // A confirmed device-removed event is terminal: stop recording so the render
   // thread cannot race the fatal dialog into a crash.
@@ -196,7 +225,13 @@ bool Video::FlushRenderStateLocked(u32 device_guest) {
   // alpha enable bit. BD inlines its render state writes at LTCG-eligible sites
   // and routes the rest through bdSetRenderState's dispatch table, so the
   // register shadow merges both.
-  ReadDeviceRenderState(s, device_guest);
+  if (captured) {
+    ApplyGuestDrawState(s, *captured);
+  } else {
+    GuestDrawState now;
+    CaptureGuestDrawState(device_guest, now);
+    ApplyGuestDrawState(s, now);
+  }
 
   // Anything missing here means the engine has not wired the pipeline up yet.
   if (!s.pipelineState.vertexShader || !s.pipelineState.vertexDeclaration) {

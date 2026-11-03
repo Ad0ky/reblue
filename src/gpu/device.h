@@ -218,9 +218,28 @@ public:
 
   // False means a precondition failed and the caller must skip the draw.
   static bool FlushRenderState(u32 device_guest);
-  // Same, but the caller holds state().mutex.
-  static bool FlushRenderStateLocked(u32 device_guest);
+  // Same, but the caller holds state().mutex. 'captured' is the draw's guest
+  // render state read beforehand (CaptureGuestDrawState); null reads it now.
+  static bool FlushRenderStateLocked(u32 device_guest,
+                                     const struct GuestDrawState *captured = nullptr);
 };
+
+// The guest render state a draw is lowered with, read from guest memory when
+// the draw is issued (render thread plan, stage 1, docs/SWITCH.md): the Xenos
+// blend/colour-control register shadow and BD's render state cache. A draw
+// recorded later, on another thread, must not read them then, since the game
+// keeps writing them for the next draws.
+struct GuestDrawState {
+  bool device = false; // the two device registers below were read
+  u32 blendControl = 0;
+  u32 colorControl = 0;
+  bool cache = false; // the render state cache fields below were read
+  u32 zEnable = 0, zFunc = 0, zWriteEnable = 0, fillMode = 0, cullMode = 0;
+  u32 stencilEnable = 0, twoSidedStencilMode = 0, stencilFail = 0,
+      stencilZFail = 0, stencilPass = 0, stencilFunc = 0, stencilRef = 0,
+      stencilMask = 0, stencilWriteMask = 0, colorWriteEnable = 0;
+};
+void CaptureGuestDrawState(u32 device_guest, GuestDrawState &out);
 
 // plume's createBuffer/createTexture hand back a non-null wrapper around a null
 // backend resource on failure. Use these rather than device->create* directly.

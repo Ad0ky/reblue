@@ -99,6 +99,10 @@ void DispatchDraw(u32 device_guest, u32 primitive_type, const char *name,
   // One lock across the whole recording sequence: loader threads record texture
   // uploads and Present records under the same mutex, and the per-frame command
   // list they all write is single-producer.
+  // The guest render state is read before taking the renderer lock (render
+  // thread plan, stage 1): the recording below reads only this copy.
+  bd::gpu::GuestDrawState guest_state;
+  bd::gpu::CaptureGuestDrawState(device_guest, guest_state);
   auto &s = bd::gpu::state();
   std::unique_lock<std::mutex> lock(s.mutex);
   bd::gpu::Video::OpenCommandListLocked();
@@ -111,7 +115,7 @@ void DispatchDraw(u32 device_guest, u32 primitive_type, const char *name,
   if (!bd::gpu::Video::BindDrawFramebufferLocked()) {
     return;
   }
-  if (!bd::gpu::Video::FlushRenderStateLocked(device_guest)) {
+  if (!bd::gpu::Video::FlushRenderStateLocked(device_guest, &guest_state)) {
     return; // FlushRenderState logs its own reason
   }
 
