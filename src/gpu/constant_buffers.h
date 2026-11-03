@@ -167,7 +167,7 @@ bool CaptureDeltaConstants(ConstantBank bank, u32 device_guest, u32 bytes,
 void AbsorbDeltaConstants(ConstantBank bank, const DeltaCaptureView &capture);
 bool ApplyDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
                          const DeltaCaptureView &capture);
-// Both halves at once.
+// Both halves in one pass (inline mode, as before the render queue).
 bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
                         u32 device_guest, u32 bytes, const GuestShader *shader);
 // The shared block (texture and sampler indices, bool constants...) kept in

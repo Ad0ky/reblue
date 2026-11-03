@@ -374,7 +374,9 @@ u32 ReleaseSurfaceLevel(rex::MappedPtr<bd::gpu::D3DResource> res) {
 } // namespace
 
 u32 D3DResource_Release_hook(rex::MappedPtr<bd::gpu::D3DResource> res) {
-  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
+  // Not waiting for the render thread (render thread plan): the host
+  // objects are destroyed only after the fence of the frame being recorded,
+  // and the game waits for the render thread before it ends that frame.
   if (!res)
     return 0;
   bd::gpu::ResourceType type;
@@ -406,7 +408,9 @@ u32 D3DResource_AddRef_hook(rex::MappedPtr<bd::gpu::D3DResource> res) {
 }
 
 void D3DResource_Destroy_hook(u32 res_guest) {
-  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
+  // Not waiting for the render thread (render thread plan): the host
+  // objects are destroyed only after the fence of the frame being recorded,
+  // and the game waits for the render thread before it ends that frame.
   if (!res_guest)
     return;
   bd::gpu::ResourceType type;

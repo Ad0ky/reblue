@@ -46,13 +46,16 @@ extern std::atomic<bool> g_abandoned;
 
 using InvokeFn = void (*)(void *closure, const u8 *payload, u32 size);
 
-// Room in the ring for a record of 'closure_size' + 'payload_size' bytes:
-// fills in the header and returns where the closure goes (the payload follows
-// it at payload_offset). Locks the producer side until Commit().
-void *Reserve(u32 closure_size, u32 payload_size, InvokeFn invoke,
-              u32 &payload_offset);
-// kick: wake the render thread now (a draw); state records wait for one.
-void Commit(bool kick);
+// Room in the calling thread's batch for a record of 'closure_size' +
+// 'payload_size' bytes: returns where the closure goes (the payload follows
+// it at payload_offset).
+void *Append(u32 closure_size, u32 payload_size, InvokeFn invoke,
+             u32 &payload_offset);
+// Sends the batch on when it has grown large.
+void AfterAppend();
+// Sends the calling thread's batch to the ring as one record. kick: wake
+// the render thread now (a draw, a Sync).
+void Flush(bool kick);
 
 template <class F> void Invoke(void *closure, const u8 *payload, u32 size) {
   auto *f = static_cast<F *>(closure);
@@ -87,41 +90,47 @@ inline void SyncIfThreaded(const char *site = __builtin_FUNCTION()) {
     Sync(site);
 }
 
-// Runs f() now (inline) or queues it (threaded). f is moved into the ring:
-// what it captures must stay valid until it runs (host objects do: they are
-// destroyed a frame later, after the fence).
+// Runs f() now (inline) or queues it (threaded). Queued, f is copied into
+// the calling thread's batch, which reaches the ring as one record with the
+// next draw (RunDraw), at Sync, or when it fills up: the state set before a
+// draw is only needed by that draw, and one record costs one lock instead of
+// one per call. What f captures must stay valid until it runs (host objects
+// do: they are destroyed a frame later, after the fence), and f must be
+// trivially copyable (it is copied as bytes).
 template <class F> void Run(F &&f) {
   using Fn = std::decay_t<F>;
   if (!detail::g_threaded || OnRenderThread()) {
     f();
     return;
   }
+  static_assert(std::is_trivially_copyable_v<Fn>,
+                "a queued record is copied as bytes");
+  static_assert(alignof(Fn) <= 16);
   if (detail::g_abandoned.load(std::memory_order_relaxed))
     return;
   u32 payload_offset = 0;
-  void *at = detail::Reserve(u32(sizeof(Fn)), 0, &detail::Invoke<Fn>,
-                             payload_offset);
+  void *at = detail::Append(u32(sizeof(Fn)), 0, &detail::Invoke<Fn>,
+                            payload_offset);
   new (at) Fn(std::forward<F>(f));
-  detail::Commit(false);
+  detail::AfterAppend();
 }
 
-// Like Run, with 'size' bytes copied from 'bytes' now: f(const u8 *data,
-// u32 size) gets the copy (inline, the original).
-template <class F> void RunWithBytes(const void *bytes, u32 size, F &&f) {
+// A draw, queued only (the caller records inline itself when not threaded):
+// 'write' fills the record's 'size' payload bytes in place, f(const u8 *data,
+// u32 size) gets them on the render thread. The batch goes to the ring with
+// it and the render thread is woken.
+template <class W, class F> void RunDraw(u32 size, W &&write, F &&f) {
   using Fn = std::decay_t<F>;
-  if (!detail::g_threaded || OnRenderThread()) {
-    f(static_cast<const u8 *>(bytes), size);
-    return;
-  }
+  static_assert(std::is_trivially_copyable_v<Fn>,
+                "a queued record is copied as bytes");
   if (detail::g_abandoned.load(std::memory_order_relaxed))
     return;
   u32 payload_offset = 0;
-  void *at = detail::Reserve(u32(sizeof(Fn)), size, &detail::Invoke<Fn>,
-                             payload_offset);
+  void *at = detail::Append(u32(sizeof(Fn)), size, &detail::Invoke<Fn>,
+                            payload_offset);
   new (at) Fn(std::forward<F>(f));
-  if (size)
-    std::memcpy(static_cast<u8 *>(at) + payload_offset, bytes, size);
-  detail::Commit(true);
+  write(static_cast<u8 *>(at) + payload_offset);
+  detail::Flush(true);
 }
 
 // Records issued and run since the last call, and the times a caller waited

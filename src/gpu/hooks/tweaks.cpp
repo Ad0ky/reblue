@@ -184,6 +184,10 @@ void bdShadowMapTextureResizeHook(PPCRegister &r31) {
   if (!texture)
     return;
   const u32 d = static_cast<u32>(bd::gpu::Settings::Get().ShadowDimension());
+  // Called every frame; the size only changes with the setting. Only this
+  // thread resizes it, so its size can be read without waiting.
+  if (texture->width == d && texture->height == d)
+    return;
   bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   bd::gpu::Video::ResizeTexture(texture, d, d);
 }

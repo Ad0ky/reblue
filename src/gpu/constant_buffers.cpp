@@ -110,6 +110,9 @@ struct UploadState {
   alignas(16) u8 deltaShadow[2][kConstantBlockBytes];
   // The guest's registers as the capture last sent them (big-endian): what
   // a register the GPU copy lacks is rebuilt from (ApplyDeltaConstants).
+  // Inline: the guest's own big-endian bytes of what deltaShadow holds
+  // swapped, compared in this form (two plain loads, no byte swap).
+  alignas(16) u8 deltaRaw[2][kConstantBlockBytes];
   alignas(16) u8 deltaMirror[2][kConstantBlockBytes];
   u64 deltaPending[2][4] = {}; // mirror registers changed, not pushed yet
   u32 deltaValid[2] = {0, 0};
@@ -1004,15 +1007,211 @@ bool ApplyDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
 #endif
 }
 
+// Inline (bd_render_thread off): both halves in one pass, as before the
+// render queue. The split costs ~4% more of the Draw Thread per draw (a
+// second pass over the changed registers and the mirror), which only pays
+// when the halves run on two threads.
 bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
                         u32 device_guest, u32 bytes,
-                        const GuestShader *shader) {
-  if (!list)
+                        const GuestShader * /*shader*/) {
+#if defined(PLUME_DEKO3D)
+  BD_CPU_ZONE("PushDeltaConstants");
+  auto &s = upload_state();
+  if (!list || !device_guest || bank > kPixelBank || !EnsureDeltaBuffer(s))
     return false;
-  DeltaCapture cap;
-  if (!CaptureDeltaConstants(bank, device_guest, bytes, shader, cap))
+  const u32 regs = (std::min(bytes, kConstantBlockBytes) + 15u) / 16u;
+  const u8 *guest = bd::mem::at<const u8>(
+      device_guest + u32(bank == kVertexBank
+                             ? offsetof(D3DDevice, vsFloatConstants)
+                             : offsetof(D3DDevice, psFloatConstants)));
+  if (!guest)
     return false;
-  return ApplyDeltaConstants(list, bank, View(cap));
+
+  // The registers to look at: the ones the setters touched since they were
+  // last sent, the always-checked ones, and all that the GPU copy does not
+  // hold yet (after a new command list, or a shader reading further).
+  u64 want[4];
+  auto &dirty = g_delta_dirty[bank];
+  t_delta_draw = true;
+  for (u32 w = 0; w < 4; ++w) {
+    const u32 lo = w * 64;
+    if (lo >= regs) {
+      want[w] = 0;
+      continue;
+    }
+    const u64 inRange =
+        regs - lo >= 64 ? ~0ull : ((1ull << (regs - lo)) - 1);
+    // Bits past the shader's range stay set for a later shader that reads them.
+    want[w] = g_delta_local[bank][w] & inRange;
+    g_delta_local[bank][w] &= ~inRange;
+    if (dirty.bits[w].load(std::memory_order_relaxed) & inRange)
+      want[w] |= dirty.bits[w].fetch_and(~inRange, std::memory_order_relaxed) &
+                 inRange;
+  }
+  const u32 known = s.deltaValid[bank] / 16;
+  for (u32 r = known; r < regs; ++r)
+    want[r / 64] |= 1ull << (r % 64);
+  const u8 *always = bank == kVertexBank ? kAlwaysVertex : kAlwaysPixel;
+  const u32 nAlways = bank == kVertexBank ? std::size(kAlwaysVertex)
+                                          : std::size(kAlwaysPixel);
+  for (u32 i = 0; i < nAlways; ++i)
+    if (always[i] < regs)
+      want[always[i] / 64] |= 1ull << (always[i] % 64);
+  for (u32 w = 0; w < 4 && w * 64 < regs; ++w) {
+    const u32 lo = w * 64;
+    const u64 inRange = regs - lo >= 64 ? ~0ull : ((1ull << (regs - lo)) - 1);
+    want[w] |= g_delta_learned[bank].bits[w].load(std::memory_order_relaxed) &
+               inRange;
+  }
+
+  // Sampled check of the whole range: a register that changed without being
+  // marked is a writer the lists above miss; it is learned (g_delta_learned).
+  // One call in 32 for the first 4096 checks, one in 256 after (the console
+  // runs found their writers within seconds; the full read was ~2% of the
+  // draw thread).
+  static u32 verifyTick[2] = {0, 0};
+  const u32 tick = ++verifyTick[bank];
+  const bool verify = (tick & (tick < 131072u ? 31u : 255u)) == 0;
+
+  // The blur pixel shader reads c50 as the screen UV scale and gets 0.5
+  // (PinScreenUVScaleReg); the GPU copy then differs from the guest's c50, so
+  // it is looked at again by the next draw.
+  const auto *ps = bd::gpu::state().pipelineState.pixelShader;
+  const bool pinUv = bank == kPixelBank && regs > 50 && ps &&
+                     ps->shaderCacheEntry &&
+                     ps->shaderCacheEntry->hash == kBDBlurPSHash;
+  // c50 is looked at whenever the pin is on now or was on the last time.
+  const bool pinCheck =
+      bank == kPixelBank && regs > 50 && (pinUv || s.deltaPinned);
+  if (pinCheck)
+    want[0] |= 1ull << 50;
+
+  // Stage 1 of the render thread plan (docs/SWITCH.md): the registers are
+  // read from the guest in one pass (capture: the ones that may have changed,
+  // as the guest has them now) and lowered and pushed in a second (apply),
+  // which reads only the capture. Recorded on another thread later, the apply
+  // half must not look at the guest's registers, which the game keeps writing.
+  struct Captured {
+    u16 reg;
+    bool marked;
+  };
+  Captured entries[kConstantRegisterCount];
+  alignas(16) u8 values[kConstantRegisterCount][16];
+  u32 count = 0;
+  u8 *rawShadow = s.deltaRaw[bank];
+  u32 looked = 0;
+  for (u32 r = 0; r < regs; ++r) {
+    const bool marked = (want[r / 64] >> (r % 64)) & 1u;
+    if (!marked && !verify) {
+      // Skip to the next marked register.
+      u32 w = r / 64;
+      u64 rest = want[w] & (~0ull << (r % 64));
+      while (!rest && ++w < 4)
+        rest = want[w];
+      if (!rest)
+        break;
+      r = w * 64 + u32(__builtin_ctzll(rest)) - 1;
+      continue;
+    }
+    ++looked;
+    const u8 *gr = guest + r * 16;
+    if (r < known && !(pinCheck && r == 50) && SameRegister(gr, rawShadow + r * 16))
+      continue;
+    std::memcpy(rawShadow + r * 16, gr, 16);
+    entries[count] = {u16(r), marked};
+    std::memcpy(values[count], gr, 16);
+    ++count;
+  }
+
+  // Apply: lowered to the GPU's form, compared with what the GPU copy holds,
+  // and pushed in runs (gaps of up to two unchanged registers are pushed
+  // along, one push instead of two).
+  u8 *shadow = s.deltaShadow[bank];
+  const u64 base = s.deltaGpu + u64(bank) * kConstantBlockBytes;
+  u32 pushed = 0;
+  u32 runStart = 0, runEnd = 0; // [start, end) registers, end 0 = no run
+  auto flush = [&] {
+    if (!runEnd)
+      return;
+    const u32 off = runStart * 16, len = (runEnd - runStart) * 16;
+    plume::Deko3DPushUniform(list, base, kConstantBlockBytes, off,
+                             shadow + off, len);
+    pushed += len;
+    runEnd = 0;
+  };
+  for (u32 i = 0; i < count; ++i) {
+    const u32 r = entries[i].reg;
+    const bool marked = entries[i].marked;
+    if (runEnd && r > runEnd + 2)
+      flush();
+#if defined(__aarch64__) || defined(_M_ARM64)
+    uint8x16_t v = LoadGuestRegisterVec(values[i]);
+    if (pinUv && r == 50) {
+      const uint64x2_t halves = vsetq_lane_u64(
+          0x3F0000003F000000ull, vreinterpretq_u64_u8(v), 0); // x = y = 0.5f
+      v = vreinterpretq_u8_u64(halves);
+    }
+    if (r < known && SameRegisterVec(v, shadow + r * 16))
+      continue;
+#else
+    alignas(16) u8 v[16];
+    LoadGuestRegister(v, values[i]);
+    if (pinUv && r == 50) {
+      const float half = 0.5f;
+      std::memcpy(v, &half, 4);
+      std::memcpy(v + 4, &half, 4);
+    }
+    if (r < known && SameRegister(v, shadow + r * 16))
+      continue;
+#endif
+    if (!marked) {
+      g_delta_misses.fetch_add(1, std::memory_order_relaxed);
+      const u64 bit = 1ull << (r % 64);
+      const u64 before = g_delta_learned[bank].bits[r / 64].fetch_or(
+          bit, std::memory_order_relaxed);
+      if (!(before & bit)) {
+        const auto *sh = bank == kVertexBank
+                             ? bd::gpu::state().pipelineState.vertexShader
+                             : ps;
+        const u64 h = (sh && sh->shaderCacheEntry) ? sh->shaderCacheEntry->hash : 0;
+        std::fprintf(stderr,
+                     "[ubo] in-place constants: %s c%u changed without a "
+                     "setter (shader %016llX): checked on every draw from now\n",
+                     bank == kVertexBank ? "VS" : "PS", r,
+                     static_cast<unsigned long long>(h));
+      }
+    }
+#if defined(__aarch64__) || defined(_M_ARM64)
+    vst1q_u8(shadow + r * 16, v);
+#else
+    std::memcpy(shadow + r * 16, v, 16);
+#endif
+    if (runEnd && r <= runEnd + 2) {
+      runEnd = r + 1;
+    } else {
+      flush();
+      runStart = r;
+      runEnd = r + 1;
+    }
+  }
+  flush();
+  if (bank == kPixelBank && regs > 50)
+    s.deltaPinned = pinUv;
+  s.deltaValid[bank] = std::max(s.deltaValid[bank], regs * 16);
+  g_delta_draws.fetch_add(1, std::memory_order_relaxed);
+  g_delta_regs.fetch_add(looked, std::memory_order_relaxed);
+  if (pushed) {
+    g_delta_pushes.fetch_add(1, std::memory_order_relaxed);
+    g_delta_bytes.fetch_add(pushed, std::memory_order_relaxed);
+  }
+  return true;
+#else
+  (void)list;
+  (void)bank;
+  (void)device_guest;
+  (void)bytes;
+  return false;
+#endif
 }
 
 void BindDeltaConstants(plume::RenderCommandList *list,

@@ -298,24 +298,22 @@ void IssueDraw(u32 device_guest, u32 primitive_type, const char *name,
   const u32 ps_regs_bytes = Align16(q.psCount * 2u);
   const u32 size = head + vs_regs_bytes + q.vsCount * 16u + ps_regs_bytes +
                    q.psCount * 16u + Align16(q.upBytes);
-  static thread_local std::vector<u8> scratch;
-  if (scratch.size() < size)
-    scratch.resize(size);
-  u8 *p = scratch.data();
-  std::memcpy(p, &q, sizeof(q));
-  u8 *at = p + head;
-  std::memcpy(at, vs_cap.reg, q.vsCount * 2u);
-  at += vs_regs_bytes;
-  std::memcpy(at, vs_cap.values, q.vsCount * 16u);
-  at += q.vsCount * 16u;
-  std::memcpy(at, ps_cap.reg, q.psCount * 2u);
-  at += ps_regs_bytes;
-  std::memcpy(at, ps_cap.values, q.psCount * 16u);
-  at += q.psCount * 16u;
-  if (q.upBytes)
-    std::memcpy(at, up_src, q.upBytes);
+  auto write = [&](u8 *p) {
+    std::memcpy(p, &q, sizeof(q));
+    u8 *at = p + head;
+    std::memcpy(at, vs_cap.reg, q.vsCount * 2u);
+    at += vs_regs_bytes;
+    std::memcpy(at, vs_cap.values, q.vsCount * 16u);
+    at += q.vsCount * 16u;
+    std::memcpy(at, ps_cap.reg, q.psCount * 2u);
+    at += ps_regs_bytes;
+    std::memcpy(at, ps_cap.values, q.psCount * 16u);
+    at += q.psCount * 16u;
+    if (q.upBytes)
+      std::memcpy(at, up_src, q.upBytes);
+  };
 
-  bd::gpu::rq::RunWithBytes(p, size, [](const u8 *data, u32 /*size*/) {
+  bd::gpu::rq::RunDraw(size, write, [](const u8 *data, u32 /*size*/) {
     QueuedDraw q;
     std::memcpy(&q, data, sizeof(q));
     const u32 head = Align16(u32(sizeof(QueuedDraw)));

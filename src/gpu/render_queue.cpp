@@ -204,13 +204,7 @@ void Loop() {
   }
 }
 
-} // namespace
-
-bool OnRenderThread() { return t_render_thread; }
-
-namespace detail {
-
-void *Reserve(u32 closure_size, u32 payload_size, InvokeFn invoke,
+void *Reserve(u32 closure_size, u32 payload_size, detail::InvokeFn invoke,
               u32 &payload_offset) {
   auto &r = g_ring;
   r.producer.lock();
@@ -270,10 +264,103 @@ void Commit(bool kick) {
   if (wake)
     Notify();
   r.producer.unlock();
-  g_stat_issued.fetch_add(1, std::memory_order_relaxed);
+}
+
+
+// A thread's records not sent to the ring yet. Each one: a 32-byte prefix
+// (size, payload offset, payload size, invoke), the closure, the payload.
+struct Batch {
+  std::unique_ptr<u8[]> storage;
+  u8 *data = nullptr;
+  u32 capacity = 0;
+  u32 used = 0;
+  u32 records = 0;
+};
+thread_local Batch t_batch;
+constexpr u32 kBatchSend = 32 * 1024; // sent on when it grows past this
+
+struct SubHeader {
+  u32 size;
+  u32 payload;
+  u32 payloadSize;
+  u32 pad;
+};
+
+void GrowBatch(Batch &b, u32 need) {
+  u32 cap = b.capacity ? b.capacity : 64 * 1024;
+  while (cap < need)
+    cap *= 2;
+  std::unique_ptr<u8[]> storage(new u8[cap + kAlign]);
+  auto addr = reinterpret_cast<uintptr_t>(storage.get());
+  u8 *data =
+      reinterpret_cast<u8 *>((addr + kAlign - 1) & ~uintptr_t(kAlign - 1));
+  if (b.used)
+    std::memcpy(data, b.data, b.used);
+  b.storage = std::move(storage);
+  b.data = data;
+  b.capacity = cap;
+}
+
+// The ring record a batch travels in: runs its records in order.
+void RunBatch(void * /*closure*/, const u8 *payload, u32 size) {
+  u32 at = 0;
+  while (at < size) {
+    SubHeader h;
+    std::memcpy(&h, payload + at, sizeof(h));
+    detail::InvokeFn invoke;
+    std::memcpy(&invoke, payload + at + kHeaderBytes, sizeof(invoke));
+    u8 *closure = const_cast<u8 *>(payload) + at + kRecordPrefix;
+    invoke(closure, closure + h.payload, h.payloadSize);
+    at += h.size;
+  }
+}
+} // namespace
+
+bool OnRenderThread() { return t_render_thread; }
+
+namespace detail {
+
+void *Append(u32 closure_size, u32 payload_size, InvokeFn invoke,
+             u32 &payload_offset) {
+  auto &b = t_batch;
+  payload_offset = AlignUp(closure_size ? closure_size : 1);
+  const u32 size = kRecordPrefix + payload_offset + AlignUp(payload_size);
+  if (b.used + size > b.capacity)
+    GrowBatch(b, b.used + size);
+  u8 *rec = b.data + b.used;
+  SubHeader h{size, payload_offset, payload_size, 0};
+  std::memcpy(rec, &h, sizeof(h));
+  std::memcpy(rec + kHeaderBytes, &invoke, sizeof(invoke));
+  b.used += size;
+  ++b.records;
+  return rec + kRecordPrefix;
+}
+
+void AfterAppend() {
+  if (t_batch.used >= kBatchSend)
+    Flush(false);
+}
+
+void Flush(bool kick) {
+  auto &b = t_batch;
+  if (!b.used) {
+    if (kick) {
+      std::lock_guard lock(g_ring.producer);
+      Notify();
+    }
+    return;
+  }
+  u32 payload_offset = 0;
+  u8 *at = static_cast<u8 *>(Reserve(0, b.used, &RunBatch, payload_offset));
+  std::memcpy(at + payload_offset, b.data, b.used);
+  Commit(kick);
+  g_stat_issued.fetch_add(b.records, std::memory_order_relaxed);
+  b.used = 0;
+  b.records = 0;
 }
 
 } // namespace detail
+
 
 void Start() {
   if (g_ring.thread.joinable())
@@ -330,6 +417,8 @@ void Sync(const char *site) {
   if (!detail::g_threaded || t_render_thread ||
       detail::g_abandoned.load(std::memory_order_acquire))
     return;
+  // This thread's own records first.
+  detail::Flush(false);
   auto &r = g_ring;
   // Everything published so far; a record still being written by another
   // producer is not this caller's to wait for.
