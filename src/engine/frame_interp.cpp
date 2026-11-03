@@ -2865,10 +2865,14 @@ void OnGameStep() {
   if (TickDue())
     FlushEvtHidePending();
   StepEventScenes();
-  if (InterpolationActive() && TickDue()) {
+  // The blink hold (PlyTask__Draw) must also be released when interpolation
+  // is off: the frame-rate throttle (bd_interp_min_fps) can turn it off with a
+  // hold in place, and the player then stayed half transparent after the
+  // post-battle blink for as long as the game ran at the 30 fps cap.
+  if (!g_plyBlinkWindow.empty() && (TickDue() || !InterpolationActive()))
     FlushPlyBlinkWindow();
+  if (InterpolationActive() && TickDue())
     ClearLightChangedList();
-  }
 }
 
 void MarkCameraSteered() {
