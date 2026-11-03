@@ -153,8 +153,9 @@ void bdReflectionResolutionScaleHook(PPCRegister &r31) {
 void bdReflectionSurfaceTagHook(PPCRegister &r3) {
   auto *surface =
       bd::gpu::HostResourceHeap::FromGuest<bd::gpu::GuestTexture>(r3.u32);
+  // Queued like the surface's reset (SurfaceRegistry::Get), which it follows.
   if (surface)
-    surface->reflection = true;
+    bd::gpu::rq::Run([surface] { surface->reflection = true; });
 }
 
 void bdReflectionTextureSeedHook(PPCRegister &r3) {
@@ -162,9 +163,10 @@ void bdReflectionTextureSeedHook(PPCRegister &r3) {
       bd::gpu::HostResourceHeap::FromGuest<bd::gpu::GuestTexture>(r3.u32);
   if (!texture)
     return;
-  texture->reflection = true;
-  bd::gpu::rq::Run(
-      [texture] { bd::gpu::Video::ClearTexture(texture, kOpaqueBlackArgb); });
+  bd::gpu::rq::Run([texture] {
+    texture->reflection = true;
+    bd::gpu::Video::ClearTexture(texture, kOpaqueBlackArgb);
+  });
 }
 
 // The light frustum is world-space and receivers sample by UV, so a larger map

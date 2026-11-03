@@ -20,6 +20,7 @@
 #include "gpu/device.h"
 #include "gpu/format.h"
 #include "gpu/host_resource_heap.h"
+#include "gpu/render_queue.h"
 #include "gpu/resources.h"
 
 namespace bd::gpu {
@@ -109,19 +110,24 @@ GuestTexture *CreateSurface(u32 width, u32 height, u32 guest_format,
 
 void ResetIssuedSurface(GuestTexture *surface, u32 guest_format,
                         bool is_depth) {
+  // The guest's header now: the game reads it as soon as it has the surface.
   InitResourceHeader(surface->x360.as_surface.resource,
                      D3DResourceType::kSurface);
-  Video::ReissueSurface(surface);
-  surface->resolveScale = 1.0f;
-  surface->resolveLevel = 0;
-  surface->resolveFace = 0;
-  surface->pendingDestroy = false;
-  surface->pendingGPURead = false;
-  surface->reflection = false;
-  surface->layout = plume::RenderTextureLayout::UNKNOWN;
-  surface->guestFormat = guest_format;
-  if (surface->texture && !is_depth)
-    Video::BindTextureSRV(surface);
+  surface->guestFormat = guest_format; // GetDesc answers with it
+  // The renderer's side in order with the draws already issued (render
+  // thread plan): those may still resolve from or into this surface.
+  rq::Run([surface, is_depth] {
+    Video::ReissueSurface(surface);
+    surface->resolveScale = 1.0f;
+    surface->resolveLevel = 0;
+    surface->resolveFace = 0;
+    surface->pendingDestroy = false;
+    surface->pendingGPURead = false;
+    surface->reflection = false;
+    surface->layout = plume::RenderTextureLayout::UNKNOWN;
+    if (surface->texture && !is_depth)
+      Video::BindTextureSRV(surface);
+  });
 }
 
 } // namespace

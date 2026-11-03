@@ -63,7 +63,8 @@ bd::gpu::GuestTexture *D3DDevice_CreateSurface_hook(u32 width, u32 height,
                                                     u32 format,
                                                     u32 multi_sample,
                                                     u32 params_va) {
-  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
+  // Not waiting for the render thread: a reused surface is reset in order
+  // with the queued draws (SurfaceRegistry::Get), a new one is not in any.
   const plume::RenderSampleCounts msaa_count =
       (multi_sample != 0 && IsFullFrameScene(width, height) &&
        bd::gpu::Video::CvarMSAASampleCount() !=
