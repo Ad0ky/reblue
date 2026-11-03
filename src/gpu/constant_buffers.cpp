@@ -27,6 +27,7 @@
 #include "gpu/device.h"
 #include "gpu/hooks/tweaks.h"
 #include "gpu/sampler_cache.h"
+#include "gpu/render_queue.h"
 #include "gpu/settings.h"
 #include "gpu/shaders/shader_cache.h"
 
@@ -869,6 +870,45 @@ bool CaptureDeltaConstants(ConstantBank bank, u32 device_guest, u32 bytes,
   (void)shader;
   (void)out;
   return false;
+#endif
+}
+
+void ConstantsWritten(ConstantBank bank, u32 device_guest, u32 start,
+                      u32 count) {
+#if defined(PLUME_DEKO3D)
+  // Inline, or a thread that does not draw (its batch would wait for a draw
+  // of its own): the marks, as before.
+  if (!rq::Threaded() || !t_delta_draw || bank > kPixelBank ||
+      start >= kConstantRegisterCount || !count) {
+    MarkConstantRegisters(bank, start, count);
+    return;
+  }
+  count = std::min(count, kConstantRegisterCount - start);
+  const u8 *guest = bd::mem::at<const u8>(
+      device_guest + u32(bank == kVertexBank
+                             ? offsetof(D3DDevice, vsFloatConstants)
+                             : offsetof(D3DDevice, psFloatConstants)) +
+      start * 16);
+  if (!guest) {
+    MarkConstantRegisters(bank, start, count);
+    return;
+  }
+  // What the capture compares with: these registers are sent, so its sampled
+  // check must not take them for writes without a setter.
+  std::memcpy(g_capture.raw[bank] + start * 16, guest, count * 16);
+  rq::RunBytes(guest, count * 16, [bank, start](const u8 *data, u32 size) {
+    auto &s = upload_state();
+    u8 *mirror = s.deltaMirror[bank];
+    const u32 n = size / 16;
+    for (u32 i = 0; i < n; ++i) {
+      const u32 r = start + i;
+      CopyRegister(mirror + r * 16, data + i * 16);
+      s.deltaPending[bank][r / 64] |= 1ull << (r % 64);
+    }
+  });
+#else
+  MarkConstantRegisters(bank, start, count);
+  (void)device_guest;
 #endif
 }
 

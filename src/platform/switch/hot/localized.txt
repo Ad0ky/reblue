@@ -52,7 +52,6 @@ sub_82198138
 sub_8221DBE0
 sub_8218A8C8
 sub_82281D28
-bdSinCos
 CharaVO__BuildBoneMatrices
 bdAnimBoneEvaluate
 sub_82275C08

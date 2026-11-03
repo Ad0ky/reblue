@@ -251,8 +251,16 @@ ones are recorded on another core.
    in the worst 10% against 27.3 / 14.4 before, with the Draw Thread at 14.5
    µs of CPU a draw against 17.4. Next: Present queued too, so a frame's
    recording can overlap the next frame's game work.
-4. **Draw-path work** on the render thread (shared block skipped when nothing
-   it reads changed, fewer lock round trips).
+4. **Draw-path work.** Threaded, the D3D float constant setters send the
+   registers they wrote to the render thread at once (`ConstantsWritten`), so
+   a draw only re-reads the few registers the engine writes without a setter
+   (the capture was the largest renderer cost left on the Draw Thread).
+
+The game code itself: `engine/fast_math.cpp` runs `bdSinCos` (~8% of the Main
+Thread in slow scenes) as native code with the recompiled function's
+arithmetic. On its first call it compares itself with the recompiled function
+over 80000 angles, bit for bit, and stays off if any result differs (the
+stderr log says which). `bd_native_sincos = false` turns it off.
 
 ### Profile-guided optimisation
 

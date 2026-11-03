@@ -285,9 +285,10 @@ void D3DDevice_SetIndices_hook(u32 /*device*/, u32 indices_guest) {
 #define REBLUE_FLOAT_CONSTANT_HOOK(fn, bank, mark)                             \
   REBLUE_HOT_DECLARE(fn)                                                       \
   REX_HOOK_RAW(fn) {                                                           \
+    const u32 device = ctx.r3.u32;                                             \
     const u32 start = ctx.r4.u32, count = ctx.r6.u32;                          \
     REBLUE_HOT_CALL(fn)(ctx, base);                                            \
-    bd::gpu::MarkConstantRegisters(bank, start, count);                        \
+    bd::gpu::ConstantsWritten(bank, device, start, count);                     \
     mark;                                                                      \
   }
 #else

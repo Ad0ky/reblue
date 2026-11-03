@@ -162,6 +162,14 @@ inline DeltaCaptureView View(const DeltaCapture &c) {
 // done.
 bool CaptureDeltaConstants(ConstantBank bank, u32 device_guest, u32 bytes,
                            const GuestShader *shader, DeltaCapture &out);
+// The D3D float setters wrote registers [start, start + count) of the bank
+// (after the write). Inline it marks them for the next draw's look
+// (MarkConstantRegisters). Threaded, on the thread that draws, it sends their
+// values to the render thread at once, so the draw does not read and compare
+// them again (the capture then only looks at the registers the engine writes
+// without a setter).
+void ConstantsWritten(ConstantBank bank, u32 device_guest, u32 start,
+                      u32 count);
 // Takes the capture in (the GPU copy gets it with the next apply); the apply
 // does this first itself. For a draw that may be dropped before its apply.
 void AbsorbDeltaConstants(ConstantBank bank, const DeltaCaptureView &capture);

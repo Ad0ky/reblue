@@ -118,6 +118,27 @@ template <class F> void Run(F &&f) {
   detail::AfterAppend();
 }
 
+// Like Run, with 'size' bytes copied from 'bytes' now: f(const u8 *data,
+// u32 size) gets the copy (inline, the original).
+template <class F> void RunBytes(const void *bytes, u32 size, F &&f) {
+  using Fn = std::decay_t<F>;
+  if (!detail::g_threaded || OnRenderThread()) {
+    f(static_cast<const u8 *>(bytes), size);
+    return;
+  }
+  static_assert(std::is_trivially_copyable_v<Fn>,
+                "a queued record is copied as bytes");
+  if (detail::g_abandoned.load(std::memory_order_relaxed))
+    return;
+  u32 payload_offset = 0;
+  void *at = detail::Append(u32(sizeof(Fn)), size, &detail::Invoke<Fn>,
+                            payload_offset);
+  new (at) Fn(std::forward<F>(f));
+  if (size)
+    std::memcpy(static_cast<u8 *>(at) + payload_offset, bytes, size);
+  detail::AfterAppend();
+}
+
 // A draw, queued only (the caller records inline itself when not threaded):
 // 'write' fills the record's 'size' payload bytes in place, f(const u8 *data,
 // u32 size) gets them on the render thread. Every few draws the batch goes to
