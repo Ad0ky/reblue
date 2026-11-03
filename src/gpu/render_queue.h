@@ -30,6 +30,7 @@
 #include <cstddef>
 #include <cstring>
 #include <new>
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -50,7 +51,8 @@ using InvokeFn = void (*)(void *closure, const u8 *payload, u32 size);
 // it at payload_offset). Locks the producer side until Commit().
 void *Reserve(u32 closure_size, u32 payload_size, InvokeFn invoke,
               u32 &payload_offset);
-void Commit();
+// kick: wake the render thread now (a draw); state records wait for one.
+void Commit(bool kick);
 
 template <class F> void Invoke(void *closure, const u8 *payload, u32 size) {
   auto *f = static_cast<F *>(closure);
@@ -78,10 +80,11 @@ void Abandon();
 
 // Waits until every record issued so far has run. Inline, and on the render
 // thread itself, it returns at once.
-void Sync();
-inline void SyncIfThreaded() {
+// 'site' names the caller in the report.
+void Sync(const char *site = __builtin_FUNCTION());
+inline void SyncIfThreaded(const char *site = __builtin_FUNCTION()) {
   if (detail::g_threaded)
-    Sync();
+    Sync(site);
 }
 
 // Runs f() now (inline) or queues it (threaded). f is moved into the ring:
@@ -99,7 +102,7 @@ template <class F> void Run(F &&f) {
   void *at = detail::Reserve(u32(sizeof(Fn)), 0, &detail::Invoke<Fn>,
                              payload_offset);
   new (at) Fn(std::forward<F>(f));
-  detail::Commit();
+  detail::Commit(false);
 }
 
 // Like Run, with 'size' bytes copied from 'bytes' now: f(const u8 *data,
@@ -118,12 +121,15 @@ template <class F> void RunWithBytes(const void *bytes, u32 size, F &&f) {
   new (at) Fn(std::forward<F>(f));
   if (size)
     std::memcpy(static_cast<u8 *>(at) + payload_offset, bytes, size);
-  detail::Commit();
+  detail::Commit(true);
 }
 
 // Records issued and run since the last call, and the times a caller waited
 // in Sync() (the profiler's report).
 void Stats(u64 &issued, u64 &syncs, u64 &sync_us, u64 &full_waits);
+// The callers that waited most, per frame ("name n, ..."), since the last
+// call.
+std::string SyncSites(double frames);
 
 } // namespace bd::gpu::rq
 

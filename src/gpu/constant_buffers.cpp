@@ -650,6 +650,18 @@ inline bool SameRegister(const u8 *a, const u8 *b) {
   return ((x[0] ^ y[0]) | (x[1] ^ y[1])) == 0;
 }
 
+// One register copied as one 16-byte load and store. memcpy(.., 16) becomes
+// two 8-byte stores, and a 16-byte load of the copy soon after cannot be
+// forwarded from them on the Cortex-A57 (it waits for both to reach the
+// cache): the mirror and the capture are read back that way.
+inline void CopyRegister(u8 *dst, const u8 *src) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+  vst1q_u8(dst, vld1q_u8(src));
+#else
+  std::memcpy(dst, src, 16);
+#endif
+}
+
 #if defined(__aarch64__) || defined(_M_ARM64)
 // The lowered register kept in a vector register: LoadGuestRegister stored it
 // to the stack as 16 bytes and SameRegister read it back as two 8-byte loads,
@@ -837,9 +849,9 @@ bool CaptureDeltaConstants(ConstantBank bank, u32 device_guest, u32 bytes,
                      static_cast<unsigned long long>(h));
       }
     }
-    std::memcpy(raw + r * 16, gr, 16);
+    CopyRegister(raw + r * 16, gr);
     out.reg[count] = u16(r);
-    std::memcpy(out.values[count], gr, 16);
+    CopyRegister(out.values[count], gr);
     ++count;
   }
   c.known[bank] = std::max(known, regs);
@@ -869,7 +881,7 @@ void AbsorbDeltaConstants(ConstantBank bank, const DeltaCaptureView &cap) {
   u8 *mirror = s.deltaMirror[bank];
   for (u32 i = 0; i < cap.count; ++i) {
     const u32 r = cap.reg[i];
-    std::memcpy(mirror + r * 16, cap.values + i * 16, 16);
+    CopyRegister(mirror + r * 16, cap.values + i * 16);
     s.deltaPending[bank][r / 64] |= 1ull << (r % 64);
   }
 #else

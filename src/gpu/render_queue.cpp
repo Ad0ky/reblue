@@ -15,12 +15,14 @@
  */
 #include "gpu/render_queue.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 
 #include <rex/cvar.h>
@@ -87,6 +89,11 @@ struct Ring {
   std::condition_variable drained; // Sync / a full ring: work done
   std::atomic<bool> sleeping{false};
   std::atomic<bool> stop{false};
+  // Callers blocked in Sync or on a full ring: the render thread signals
+  // 'drained' only when there are any (a signal is a system call).
+  std::atomic<u32> waiters{0};
+  // Records committed since the render thread was last woken.
+  u32 sinceWake = 0;
   std::thread thread;
 };
 
@@ -103,8 +110,41 @@ inline u32 AlignUp(u32 v) { return (v + kAlign - 1) & ~(kAlign - 1); }
 
 void Notify() {
   if (g_ring.sleeping.load(std::memory_order_seq_cst)) {
+    g_ring.sinceWake = 0;
     std::lock_guard lock(g_ring.wake_mutex);
     g_ring.wake.notify_one();
+  }
+}
+
+void SignalDrained() {
+  if (g_ring.waiters.load(std::memory_order_seq_cst) != 0) {
+    std::lock_guard lock(g_ring.wake_mutex);
+    g_ring.drained.notify_all();
+  }
+}
+
+// Where the game waited (Sync callers), for the report.
+struct SyncSite {
+  std::atomic<const char *> name{nullptr};
+  std::atomic<u64> count{0};
+};
+SyncSite g_sites[32];
+
+void CountSite(const char *site) {
+  for (auto &s : g_sites) {
+    const char *n = s.name.load(std::memory_order_relaxed);
+    if (n == nullptr) {
+      const char *expected = nullptr;
+      if (s.name.compare_exchange_strong(expected, site) || expected == site) {
+        s.count.fetch_add(1, std::memory_order_relaxed);
+        return;
+      }
+      continue;
+    }
+    if (n == site) {
+      s.count.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
   }
 }
 
@@ -120,9 +160,9 @@ void Loop() {
   for (;;) {
     u64 end = r.published.load(std::memory_order_acquire);
     if (read == end) {
-      // Spin a little before sleeping: a draw thread issues the next record
-      // within microseconds, and a sleep/wake costs more than that.
-      for (int i = 0; i < 256 && read == end; ++i) {
+      // Spin before sleeping: the game issues the next record within
+      // microseconds, and a sleep and a wake are two system calls.
+      for (int i = 0; i < 4096 && read == end; ++i) {
 #if defined(__aarch64__)
         asm volatile("yield");
 #endif
@@ -154,12 +194,9 @@ void Loop() {
         r.doneRecords.fetch_add(1, std::memory_order_release);
       }
       read += h.size;
-      r.consumed.store(read, std::memory_order_release);
+      r.consumed.store(read, std::memory_order_seq_cst);
     }
-    {
-      std::lock_guard lock(r.wake_mutex);
-      r.drained.notify_all();
-    }
+    SignalDrained();
   }
   {
     std::lock_guard lock(r.wake_mutex);
@@ -193,11 +230,15 @@ void *Reserve(u32 closure_size, u32 payload_size, InvokeFn invoke,
   if (at + need - r.consumed.load(std::memory_order_acquire) > r.capacity) {
     g_stat_full.fetch_add(1, std::memory_order_relaxed);
     Notify();
-    std::unique_lock lock(r.wake_mutex);
-    while (at + need - r.consumed.load(std::memory_order_acquire) >
-           r.capacity) {
-      r.drained.wait_for(lock, std::chrono::milliseconds(1));
+    r.waiters.fetch_add(1, std::memory_order_seq_cst);
+    {
+      std::unique_lock lock(r.wake_mutex);
+      while (at + need - r.consumed.load(std::memory_order_seq_cst) >
+             r.capacity) {
+        r.drained.wait_for(lock, std::chrono::milliseconds(1));
+      }
     }
+    r.waiters.fetch_sub(1, std::memory_order_relaxed);
   }
   if (wrap) {
     Header skip{};
@@ -217,14 +258,19 @@ void *Reserve(u32 closure_size, u32 payload_size, InvokeFn invoke,
   return rec + kRecordPrefix;
 }
 
-void Commit() {
+void Commit(bool kick) {
   auto &r = g_ring;
   r.write = g_pending_end;
   r.issuedRecords.fetch_add(1, std::memory_order_relaxed);
   r.published.store(r.write, std::memory_order_seq_cst);
+  // A sleeping render thread is woken for a draw (kick) or once enough state
+  // records piled up, not for each record: a wake is two system calls, and
+  // the state set before a draw is only needed by the draw.
+  const bool wake = kick || ++r.sinceWake >= 64;
+  if (wake)
+    Notify();
   r.producer.unlock();
   g_stat_issued.fetch_add(1, std::memory_order_relaxed);
-  Notify();
 }
 
 } // namespace detail
@@ -280,7 +326,7 @@ void Stop() {
 
 void Abandon() { detail::g_abandoned.store(true, std::memory_order_release); }
 
-void Sync() {
+void Sync(const char *site) {
   if (!detail::g_threaded || t_render_thread ||
       detail::g_abandoned.load(std::memory_order_acquire))
     return;
@@ -291,7 +337,11 @@ void Sync() {
   if (r.consumed.load(std::memory_order_acquire) >= target)
     return;
   const auto t0 = std::chrono::steady_clock::now();
-  Notify();
+  CountSite(site);
+  {
+    std::lock_guard lock(r.producer);
+    Notify();
+  }
   // Spin first: the render thread is usually a few records behind.
   for (int i = 0; i < 2048; ++i) {
     if (r.consumed.load(std::memory_order_acquire) >= target)
@@ -301,10 +351,14 @@ void Sync() {
 #endif
   }
   if (r.consumed.load(std::memory_order_acquire) < target) {
-    std::unique_lock lock(r.wake_mutex);
-    while (r.consumed.load(std::memory_order_acquire) < target &&
-           !detail::g_abandoned.load(std::memory_order_acquire))
-      r.drained.wait_for(lock, std::chrono::milliseconds(1));
+    r.waiters.fetch_add(1, std::memory_order_seq_cst);
+    {
+      std::unique_lock lock(r.wake_mutex);
+      while (r.consumed.load(std::memory_order_seq_cst) < target &&
+             !detail::g_abandoned.load(std::memory_order_acquire))
+        r.drained.wait_for(lock, std::chrono::milliseconds(1));
+    }
+    r.waiters.fetch_sub(1, std::memory_order_relaxed);
   }
   const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
                       std::chrono::steady_clock::now() - t0)
@@ -318,6 +372,33 @@ void Stats(u64 &issued, u64 &syncs, u64 &sync_us, u64 &full_waits) {
   syncs = g_stat_syncs.exchange(0, std::memory_order_relaxed);
   sync_us = g_stat_sync_us.exchange(0, std::memory_order_relaxed);
   full_waits = g_stat_full.exchange(0, std::memory_order_relaxed);
+}
+
+std::string SyncSites(double frames) {
+  struct Entry {
+    const char *name;
+    u64 count;
+  };
+  Entry list[std::size(g_sites)];
+  size_t n = 0;
+  for (auto &s : g_sites) {
+    const char *name = s.name.load(std::memory_order_relaxed);
+    if (!name)
+      break;
+    const u64 c = s.count.exchange(0, std::memory_order_relaxed);
+    if (c)
+      list[n++] = {name, c};
+  }
+  std::sort(list, list + n,
+            [](const Entry &a, const Entry &b) { return a.count > b.count; });
+  std::string out;
+  for (size_t i = 0; i < n && i < 6; ++i) {
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "%s%s %.1f", out.empty() ? "" : ", ",
+                  list[i].name, double(list[i].count) / frames);
+    out += buf;
+  }
+  return out.empty() ? "none" : out;
 }
 
 } // namespace bd::gpu::rq

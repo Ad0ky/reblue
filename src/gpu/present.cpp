@@ -127,8 +127,9 @@ public:
       u64 issued = 0, syncs = 0, sync_us = 0, full = 0;
       rq::Stats(issued, syncs, sync_us, full);
       BD_INFO("[render-queue] per frame: {:.0f} records, {:.1f} waits for the render thread ({:.2f} ms) | queue "
-              "full in the window: {}",
-              double(issued) / frames, double(syncs) / frames, double(sync_us) / frames / 1000.0, full);
+              "full in the window: {} | waits by caller: {}",
+              double(issued) / frames, double(syncs) / frames, double(sync_us) / frames / 1000.0, full,
+              rq::SyncSites(frames));
     }
   }
   u64 dk_last_[12] = {};
