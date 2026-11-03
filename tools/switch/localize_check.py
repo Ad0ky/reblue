@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import localize  # noqa: E402
 
 PRELUDE = r'''
+#include <atomic>
 #include <csetjmp>
 #include <cstdio>
 #include <cstdlib>

@@ -269,6 +269,15 @@ register and word it leaves; it stays off on any difference
 (`sub_8272EC00`, a cubic Hermite segment) is native the same way, checked
 the same way (`bd_native_anim_interp`).
 
+The localized copies cover every guest function with samples in the console
+profiles (843 functions, as katamari-nx does with its machine copies): the
+hand-picked hot list, then a bulk batch of every other sampled function that
+no hook or SDK native replaces and that is more than a 12-instruction leaf.
+Each one passed `tools/switch/localize_check.py` (the copies that differed on
+any random run, or never completed one, stay recompiled). After a batch like
+this the PGO profile should be recorded again: copies made after it have no
+counts.
+
 The localized copies (`tools/switch/localize.py`) store `stvlx`/`stvrx` with
 one call each instead of the recompiled byte loop (a store and a bound check
 per byte): 248 of them in the hot functions, 80 in
