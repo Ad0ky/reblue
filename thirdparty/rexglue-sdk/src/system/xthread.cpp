@@ -49,6 +49,27 @@ REXCVAR_DEFINE_BOOL(ignore_thread_priorities, true, "Kernel",
 REXCVAR_DEFINE_BOOL(ignore_thread_affinities, true, "Kernel",
                     "Ignores game-specified thread affinities");
 
+#if REX_PLATFORM_SWITCH
+// re:Blue (2026-11-03): the game's own sound thread (named "SoundThread" by the
+// game) feeds the XAudio client buffers the host Audio Worker plays. At the
+// guest priority (0x3B) it shares the time slices with the spinning game
+// threads, and in busy scenes it fell behind: the console's profile counted
+// thousands of audio requests a session that found no data (audible as
+// crackling). Just above the guest band it preempts them; it waits for its
+// next buffer between runs (~12% of a core), so it does not hold a core.
+// 59 (0x3B) leaves it with the other guest threads.
+REXCVAR_DEFINE_INT32(switch_guest_sound_priority, 0x3A, "Kernel",
+                     "Switch: Horizon priority of the game's sound thread "
+                     "(lower number = more urgent). 59 = the guest default.")
+    .range(0x2C, 0x3B);
+
+namespace {
+bool IsGuestSoundThread(std::string_view name) {
+  return name.starts_with("SoundThread");
+}
+}  // namespace
+#endif
+
 namespace rex::system {
 
 const uint32_t XAPC::kSize;
@@ -186,6 +207,12 @@ void XThread::set_name(const std::string_view name) {
     // May be getting set before the thread is created.
     // One the thread is ready it will handle it.
     thread_->set_name(thread_name_);
+#if REX_PLATFORM_SWITCH
+    // The game names its threads once they run (SetThreadName), after the
+    // start set the guest priority.
+    if (guest_thread_ && IsGuestSoundThread(name))
+      thread_->set_priority(REXCVAR_GET(switch_guest_sound_priority));
+#endif
   }
 }
 
@@ -345,7 +372,8 @@ namespace {
 // before Create().
 int SwitchPriorityFor(bool guest_thread, std::string_view name) {
   if (guest_thread) {
-    return REX_SWITCH_PRIO_GUEST;
+    return IsGuestSoundThread(name) ? REXCVAR_GET(switch_guest_sound_priority)
+                                    : REX_SWITCH_PRIO_GUEST;
   }
   // set_name() stores the name with the handle appended ("Audio Worker (F8000014)"),
   // so the prefix is compared. With an exact comparison the Audio Worker and the
