@@ -20,6 +20,10 @@
 #include <cstdio>
 #include <cstring>
 
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
 #include <rex/cvar.h>
 #include <rex/hook.h>
 #include <rex/types.h>
@@ -45,6 +49,10 @@ struct Constants {
   float invTwoPi, twoPi, lead;
   // Big-endian element order: e[0] is the first float in memory.
   float k11[4], k10[4], k9[4], k8[4], k7[4], k6[4];
+#if defined(__aarch64__)
+  // The same in lane order (lane i = element 3 - i).
+  float32x4_t q11, q10, q9, q8, q7, q6;
+#endif
 };
 
 bool LoadConstants(Constants &c) {
@@ -62,6 +70,11 @@ bool LoadConstants(Constants &c) {
   for (int v = 0; v < 6 && ok; ++v)
     for (int e = 0; e < 4 && ok; ++e)
       ok = f(kCoefVa[v] + 4 * e, vec[v][e]);
+#if defined(__aarch64__)
+  float32x4_t *q[6] = {&c.q11, &c.q10, &c.q9, &c.q8, &c.q7, &c.q6};
+  for (int v = 0; v < 6; ++v)
+    *q[v] = float32x4_t{vec[v][3], vec[v][2], vec[v][1], vec[v][0]};
+#endif
   return ok;
 }
 
@@ -77,6 +90,15 @@ inline float FZ(float v) {
   return std::fabs(v) < FLT_MIN ? std::copysign(0.0f, v) : v;
 }
 inline float MulZ(float a, float b) { return FZ(FZ(a) * FZ(b)); }
+#if defined(__aarch64__)
+inline float32x4_t FZ4(float32x4_t v) {
+  // |v| < FLT_MIN is false for a NaN, which stays as it is.
+  const uint32x4_t tiny = vcaltq_f32(v, vdupq_n_f32(FLT_MIN));
+  const float32x4_t signed_zero = vreinterpretq_f32_u32(
+      vandq_u32(vreinterpretq_u32_f32(v), vdupq_n_u32(0x80000000u)));
+  return vbslq_f32(tiny, signed_zero, v);
+}
+#endif
 inline float AddZ(float a, float b) { return FZ(FZ(a) + FZ(b)); }
 
 // vmsum4fp128 as the recompiled code runs it (simde_mm_dp_ps 0xFF: a lane
@@ -130,6 +152,26 @@ void NativeSinCos(const Constants *k, double x, float &sin_v, float &cos_v) {
   const float r3 = float(double(r2) * double(r));
 
   // The vector part: v13 = {lead, r, r^2, r^3}.
+#if defined(__aarch64__)
+  // NEON, lanes as the recompiled code holds them (lane i = element 3 - i),
+  // products flushed like the original's flush mode does (vector compare and
+  // select: no FPCR write), dot products summed by vaddvq_f32 as simde does.
+  const float32x4_t v13 = FZ4(float32x4_t{r3, r2, r, k->lead});
+  const float32x4_t v0 = FZ4(vmulq_f32(v13, v13));
+  const float32x4_t v12 = FZ4(vmulq_f32(v0, vdupq_laneq_f32(v13, 2)));
+  const float d13 = vaddvq_f32(FZ4(vmulq_f32(v0, k->q11)));    // -64
+  const float d11 = vaddvq_f32(FZ4(vmulq_f32(v12, k->q10)));   // -16
+  const float32x4_t sv =
+      FZ4(vmulq_f32(vdupq_laneq_f32(v0, 0), vdupq_laneq_f32(v13, 1)));
+  const float32x4_t v0b = FZ4(vmulq_f32(v0, sv));
+  const float32x4_t v12b = FZ4(vmulq_f32(v12, sv));
+  const float32x4_t v11b = FZ4(vmulq_f32(v0b, sv));
+  const float32x4_t v13b = FZ4(vmulq_f32(v12b, sv));
+  const float d0 = vaddvq_f32(FZ4(vmulq_f32(v0b, k->q9)));     // -80
+  const float d12 = vaddvq_f32(FZ4(vmulq_f32(v12b, k->q8)));   // -48
+  const float d13b = vaddvq_f32(FZ4(vmulq_f32(v13b, k->q6)));  // -32
+  const float d0b = vaddvq_f32(FZ4(vmulq_f32(v11b, k->q7)));   // -96
+#else
   const float v13[4] = {k->lead, r, r2, r3};
   float v0[4], v12[4];
   for (int i = 0; i < 4; ++i)
@@ -147,6 +189,8 @@ void NativeSinCos(const Constants *k, double x, float &sin_v, float &cos_v) {
   const float d12 = Dot(v12b, k->k8);    // -48
   const float d13b = Dot(v13b, k->k6);   // -32
   const float d0b = Dot(v11b, k->k7);    // -96
+
+#endif
 
   cos_v = AddF(AddF(d0b, d0), d13);
   sin_v = AddF(AddF(d13b, d12), d11);
@@ -208,7 +252,9 @@ REX_HOOK_RAW(bdSinCos) {
   NativeSinCos(k, ctx.f1.f64, sin_v, cos_v);
   u32 bits;
   std::memcpy(&bits, &cos_v, 4);
-  bd::mem::store<u32>(ctx.r4.u32, bits);
+  bits = __builtin_bswap32(bits);
+  std::memcpy(base + ctx.r4.u32, &bits, 4);
   std::memcpy(&bits, &sin_v, 4);
-  bd::mem::store<u32>(ctx.r3.u32, bits);
+  bits = __builtin_bswap32(bits);
+  std::memcpy(base + ctx.r3.u32, &bits, 4);
 }

@@ -48,29 +48,55 @@ constexpr u32 kEpsilonVa = 0x820536E8;   // lis -32251, 14056 (double)
 
 constexpr u32 kVerifyCalls = 50000;
 
+// Guest memory straight from the base pointer, as the recompiled code reads
+// it (bd::mem goes through the kernel's memory object on every access).
+inline u8 Ld8(const u8 *base, u32 va) { return base[va]; }
+inline u16 Ld16(const u8 *base, u32 va) {
+  u16 v;
+  std::memcpy(&v, base + va, 2);
+  return __builtin_bswap16(v);
+}
+inline u32 Ld32(const u8 *base, u32 va) {
+  u32 v;
+  std::memcpy(&v, base + va, 4);
+  return __builtin_bswap32(v);
+}
+inline u64 Ld64(const u8 *base, u32 va) {
+  u64 v;
+  std::memcpy(&v, base + va, 8);
+  return __builtin_bswap64(v);
+}
+inline void St32(u8 *base, u32 va, u32 x) {
+  x = __builtin_bswap32(x);
+  std::memcpy(base + va, &x, 4);
+}
+inline void St64(u8 *base, u32 va, u64 x) {
+  x = __builtin_bswap64(x);
+  std::memcpy(base + va, &x, 8);
+}
+
 void Native(PPCContext &ctx, u8 *base) {
-  (void)base;
   const u32 curve = ctx.r3.u32;
   ctx.r11.s64 = -2105933824; // 0x827A0000
-  if (bd::mem::load<u8>(curve) == 0) {
+  if (Ld8(base, curve) == 0) {
     ctx.r11.s64 = ctx.r11.s64 + 31368;
-    bd::mem::store<u32>(kStateVa, 0);
+    St32(base, kStateVa, 0);
     ctx.r10.s64 = 4;
-    bd::mem::store<u32>(kStateVa + 12, 4);
+    St32(base, kStateVa + 12, 4);
     return;
   }
-  ctx.r10.u64 = bd::mem::load<u32>(curve + 4);
+  ctx.r10.u64 = Ld32(base, curve + 4);
   ctx.r9.s64 = 0;
-  ctx.r8.u64 = bd::mem::load<u32>(curve + 8);
+  ctx.r8.u64 = Ld32(base, curve + 8);
   ctx.r6.s64 = ctx.r11.s64 + 31368;
   u32 where = 3;
   if (ctx.r10.s32 > 0) {
     ctx.r7.s64 = -2113601536; // 0x82050000
     ctx.fpscr.disableFlushMode();
-    const u32 scale_bits = bd::mem::load<u32>(curve + 12);
-    const u32 time_bits = bd::mem::load<u32>(kStateVa + 8);
-    const u64 eps_bits = bd::mem::load<u64>(kEpsilonVa);
-    const u32 zero_bits = bd::mem::load<u32>(kZeroVa);
+    const u32 scale_bits = Ld32(base, curve + 12);
+    const u32 time_bits = Ld32(base, kStateVa + 8);
+    const u64 eps_bits = Ld64(base, kEpsilonVa);
+    const u32 zero_bits = Ld32(base, kZeroVa);
     float scale_f, time_f, zero_f;
     double eps;
     std::memcpy(&scale_f, &scale_bits, 4);
@@ -92,7 +118,7 @@ void Native(PPCContext &ctx, u8 *base) {
     i16 key_time = 0;
     bool found = false;
     for (;;) {
-      key_time = i16(bd::mem::load<u16>(key));
+      key_time = i16(Ld16(base, key));
       f0 = double(float(double(i64(key_time))));
       f0 = double(float(-std::fma(f0, f10, -f13)));
       if (f0 < f12) {
@@ -117,11 +143,11 @@ void Native(PPCContext &ctx, u8 *base) {
     ctx.r8.u64 = key;
     // The recompiled loop leaves the last key's time in r11 until the result
     // replaces it, and stores it at r1-16 for the conversion.
-    bd::mem::store<u64>(ctx.r1.u32 - 16, u64(i64(key_time)));
+    St64(base, ctx.r1.u32 - 16, u64(i64(key_time)));
   }
   ctx.r11.s64 = where;
-  bd::mem::store<u32>(ctx.r6.u32 + 0, ctx.r8.u32);
-  bd::mem::store<u32>(ctx.r6.u32 + 12, ctx.r11.u32);
+  St32(base, ctx.r6.u32 + 0, ctx.r8.u32);
+  St32(base, ctx.r6.u32 + 12, ctx.r11.u32);
 }
 
 bool g_disabled = false;

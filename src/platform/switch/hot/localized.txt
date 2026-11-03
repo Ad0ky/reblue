@@ -95,3 +95,10 @@ sub_82215AC0
 sub_82287EE0
 sub_8227EBE8
 sub_8227FE80
+# Fourth batch (a74bc9c profile, Main Thread in the slow scenes)
+sub_8228E550
+sub_8228D978
+sub_82284BE0
+bdMatrixBuildRotationY
+bdRenderViewInsertObject
+sub_8272EDC8
