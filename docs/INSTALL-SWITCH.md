@@ -94,11 +94,22 @@ The `reblue.toml` in this release has the settings recommended for the Switch:
 ```toml
 bd_scene_color_r11g11b10 = true   # lighter scene color format (if glows or transparency look wrong, set false)
 input_xbox_layout = false         # face buttons by letter (Switch A = Xbox A)
-bd_shadow_distance = 2.0          # shadows reach twice as far (less pop-in); 1.0 = the Switch default
-bd_shadow_update_interval = 1     # shadow map redrawn every frame; 2 = every 2nd frame (faster)
-bd_shadow_min_pixels = 4.0        # skip shadows of objects smaller than 4 pixels on screen (0 = all)
-bd_interp_min_fps = 36            # below this, no frame smoothing and a 30 fps cap
 bd_opt_audio_hints = 0            # the game's Audio Hints: no spoken "Playable", "Checkpoint"...
+
+# Shadows
+bd_shadow_distance = 2.0          # shadows reach twice as far (less pop-in); 1.0 = the Switch default
+bd_shadow_update_interval = 1     # shadow map redrawn every frame; 2 = every 2nd frame (faster, moving characters' shadows flicker)
+bd_shadow_min_pixels = 4.0        # skip shadows of objects smaller than 4 pixels on screen (0 = all)
+
+# Water reflections
+bd_reflection_update_interval = 2 # reflections redrawn every 2nd frame; 1 = every frame
+bd_reflection_min_pixels = 3.0    # skip objects smaller than 3 pixels in the reflection (0 = all)
+
+# Frame pacing
+bd_interp_min_fps = 36            # below this, no frame smoothing and a 30 fps cap
+
+# Renderer
+bd_render_thread = true           # draws recorded on their own thread; false = on the game's draw thread
 ```
 
 What the speed-related options do:
@@ -109,6 +120,9 @@ What the speed-related options do:
 | `bd_shadow_update_interval` | 1 | The sun shadow map is redrawn every Nth frame and reused in between. 2 or more is faster, but shadows on and of moving characters can flicker or trail by up to N-1 frames. |
 | `bd_shadow_min_pixels` | 4.0 | Objects that look smaller than this on screen (distant grass, bushes, posts) cast no shadow. Lower it if mid-sized shadows go missing. |
 | `bd_interp_min_fps` | 36 | Above 30 fps the game smooths motion between its 30 Hz updates. When the console can't keep this rate, smoothing turns off and the game holds 30 fps. |
+| `bd_reflection_update_interval` | 2 | Water reflections are redrawn every Nth frame and reused in between. 1 redraws them every frame. |
+| `bd_reflection_min_pixels` | 3.0 | Objects smaller than this in the reflection are left out of it. |
+| `bd_render_thread` | true | Draws are recorded on a thread of their own, on another core, while the game goes on. `false` records them on the game's draw thread, as before. |
 | `bd_opt_audio_hints` | 1 | The game's Audio Hints (the same option as in the Settings menu): spoken and on-screen notices such as "Playable", "Checkpoint" or an enemy spotting you. |
 
 ## Updating
