@@ -53,6 +53,9 @@ void *Append(u32 closure_size, u32 payload_size, InvokeFn invoke,
              u32 &payload_offset);
 // Sends the batch on when it has grown large.
 void AfterAppend();
+// After a draw: sends the batch on every few draws (and wakes the render
+// thread), not after each one: one lock, copy and wake per chunk.
+void AfterDraw();
 // Sends the calling thread's batch to the ring as one record. kick: wake
 // the render thread now (a draw, a Sync).
 void Flush(bool kick);
@@ -117,8 +120,8 @@ template <class F> void Run(F &&f) {
 
 // A draw, queued only (the caller records inline itself when not threaded):
 // 'write' fills the record's 'size' payload bytes in place, f(const u8 *data,
-// u32 size) gets them on the render thread. The batch goes to the ring with
-// it and the render thread is woken.
+// u32 size) gets them on the render thread. Every few draws the batch goes to
+// the ring and the render thread is woken.
 template <class W, class F> void RunDraw(u32 size, W &&write, F &&f) {
   using Fn = std::decay_t<F>;
   static_assert(std::is_trivially_copyable_v<Fn>,
@@ -130,7 +133,7 @@ template <class W, class F> void RunDraw(u32 size, W &&write, F &&f) {
                             payload_offset);
   new (at) Fn(std::forward<F>(f));
   write(static_cast<u8 *>(at) + payload_offset);
-  detail::Flush(true);
+  detail::AfterDraw();
 }
 
 // Records issued and run since the last call, and the times a caller waited

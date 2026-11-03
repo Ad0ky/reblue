@@ -243,11 +243,14 @@ ones are recorded on another core.
    the render thread. A draw's record carries its capture and its UP vertices.
    Every other D3D call (resource creation, locks, releases, Present) first
    waits until the queue is empty, so it finds the renderer as it would have
-   inline. `bd_render_thread` (default **off**) picks the mode at start-up; it
-   needs the in-place constants. Threaded, the log gets a `[render-queue]` line
+   inline. `bd_render_thread` (default **on**) picks the mode at start-up; it
+   needs the in-place constants. The calls are batched per thread and sent on
+   every 16 draws; resource release and surface creation do not wait. Threaded, the log gets a `[render-queue]` line
    every 10 s: records per frame and how often and how long the game waited.
-3. **Turning it on** and measuring; Present queued too, so a frame's recording
-   can overlap the next frame's game work.
+3. **On by default** (done): on the console route, 27.4 fps median and 15.8
+   in the worst 10% against 27.3 / 14.4 before, with the Draw Thread at 14.5
+   µs of CPU a draw against 17.4. Next: Present queued too, so a frame's
+   recording can overlap the next frame's game work.
 4. **Draw-path work** on the render thread (shared block skipped when nothing
    it reads changed, fewer lock round trips).
 

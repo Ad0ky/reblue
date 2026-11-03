@@ -31,7 +31,7 @@
 #include "gpu/constant_buffers.h"
 #include "platform/switch_tuning.h"
 
-REXCVAR_DEFINE_BOOL(bd_render_thread, false, "Switch",
+REXCVAR_DEFINE_BOOL(bd_render_thread, true, "Switch",
                     "Record the draws on a render thread of their own (render "
                     "thread plan, docs/SWITCH.md). Off: the game's draw thread "
                     "records them as it issues them. Needs the deko3d in-place "
@@ -160,9 +160,11 @@ void Loop() {
   for (;;) {
     u64 end = r.published.load(std::memory_order_acquire);
     if (read == end) {
-      // Spin before sleeping: the game issues the next record within
-      // microseconds, and a sleep and a wake are two system calls.
-      for (int i = 0; i < 4096 && read == end; ++i) {
+      // Spin briefly before sleeping: a chunk often follows the last within
+      // microseconds, and a sleep and a wake are two system calls. Not long:
+      // the spin holds a core the game's threads could run on (the console
+      // run spent 40% of the render thread spinning with 4096).
+      for (int i = 0; i < 512 && read == end; ++i) {
 #if defined(__aarch64__)
         asm volatile("yield");
 #endif
@@ -275,9 +277,11 @@ struct Batch {
   u32 capacity = 0;
   u32 used = 0;
   u32 records = 0;
+  u32 draws = 0; // since the batch was last sent
 };
 thread_local Batch t_batch;
 constexpr u32 kBatchSend = 32 * 1024; // sent on when it grows past this
+constexpr u32 kDrawsPerSend = 16;      // or after this many draws
 
 struct SubHeader {
   u32 size;
@@ -341,6 +345,12 @@ void AfterAppend() {
     Flush(false);
 }
 
+void AfterDraw() {
+  auto &b = t_batch;
+  if (++b.draws >= kDrawsPerSend || b.used >= kBatchSend)
+    Flush(true);
+}
+
 void Flush(bool kick) {
   auto &b = t_batch;
   if (!b.used) {
@@ -357,6 +367,7 @@ void Flush(bool kick) {
   g_stat_issued.fetch_add(b.records, std::memory_order_relaxed);
   b.used = 0;
   b.records = 0;
+  b.draws = 0;
 }
 
 } // namespace detail
