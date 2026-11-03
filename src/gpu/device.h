@@ -219,9 +219,13 @@ public:
   // False means a precondition failed and the caller must skip the draw.
   static bool FlushRenderState(u32 device_guest);
   // Same, but the caller holds state().mutex. 'captured' is the draw's guest
-  // render state read beforehand (CaptureGuestDrawState); null reads it now.
-  static bool FlushRenderStateLocked(u32 device_guest,
-                                     const struct GuestDrawState *captured = nullptr);
+  // render state read beforehand (CaptureGuestDrawState), and vs/ps_constants
+  // its float constants (CaptureDeltaConstants, both or neither); null reads
+  // them now.
+  static bool FlushRenderStateLocked(
+      u32 device_guest, const struct GuestDrawState *captured = nullptr,
+      const struct DeltaCaptureView *vs_constants = nullptr,
+      const struct DeltaCaptureView *ps_constants = nullptr);
 };
 
 // The guest render state a draw is lowered with, read from guest memory when
@@ -243,8 +247,15 @@ struct GuestDrawState {
   // VS / PS bool constants. Read with the device registers above.
   u32 fetchRaw[16][6] = {};
   u32 vsBool[4] = {}, psBool[4] = {};
+  // BD's current render pass (CurrentRenderPassId), for the pipeline record.
+  u32 renderPassId = 0;
 };
 void CaptureGuestDrawState(u32 device_guest, GuestDrawState &out);
+
+// The guest device's viewport set to the whole of 'surface', as
+// Video::SetDefaultViewport does: the half that writes guest memory, done on
+// the issuing thread (render thread plan).
+void WriteDefaultViewport(struct D3DDevice *device, GuestTexture *surface);
 
 // plume's createBuffer/createTexture hand back a non-null wrapper around a null
 // backend resource on failure. Use these rather than device->create* directly.

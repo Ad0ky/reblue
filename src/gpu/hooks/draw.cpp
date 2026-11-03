@@ -15,6 +15,7 @@
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <vector>
 
 #include <rex/graphics/xenos.h>
 #include <rex/hook.h>
@@ -32,6 +33,7 @@
 #include "gpu/format.h"
 #include "gpu/host_resource_heap.h"
 #include "gpu/output.h"
+#include "gpu/render_queue.h"
 #include "gpu/shaders/shader_cache.h"
 
 namespace {
@@ -78,8 +80,18 @@ plume::RenderPrimitiveTopology MapPrimitiveType(u32 prim) {
   }
 }
 
+// What a queued draw carries of the guest's state (render thread plan,
+// stage 2): read on the thread that issued it.
+struct DrawCapture {
+  bd::gpu::GuestDrawState guest;
+#if REBLUE_UBO_CONSTANTS
+  bd::gpu::DeltaCaptureView vs, ps;
+#endif
+};
+
 void DispatchDraw(u32 device_guest, u32 primitive_type, const char *name,
-                  const DrawArgs &args = {}) {
+                  const DrawArgs &args = {},
+                  const DrawCapture *pre = nullptr) {
 #if defined(REXGLUE_ENABLE_PROFILING)
   // Per-draw pass/shader attribution, only formatted while a profiler is
   // connected (TRACY_ON_DEMAND).
@@ -102,7 +114,8 @@ void DispatchDraw(u32 device_guest, u32 primitive_type, const char *name,
   // The guest render state is read before taking the renderer lock (render
   // thread plan, stage 1): the recording below reads only this copy.
   bd::gpu::GuestDrawState guest_state;
-  bd::gpu::CaptureGuestDrawState(device_guest, guest_state);
+  if (!pre)
+    bd::gpu::CaptureGuestDrawState(device_guest, guest_state);
   auto &s = bd::gpu::state();
   std::unique_lock<std::mutex> lock(s.mutex);
   bd::gpu::Video::OpenCommandListLocked();
@@ -115,7 +128,16 @@ void DispatchDraw(u32 device_guest, u32 primitive_type, const char *name,
   if (!bd::gpu::Video::BindDrawFramebufferLocked()) {
     return;
   }
-  if (!bd::gpu::Video::FlushRenderStateLocked(device_guest, &guest_state)) {
+#if REBLUE_UBO_CONSTANTS
+  const bool flushed =
+      pre ? bd::gpu::Video::FlushRenderStateLocked(device_guest, &pre->guest,
+                                                   &pre->vs, &pre->ps)
+          : bd::gpu::Video::FlushRenderStateLocked(device_guest, &guest_state);
+#else
+  const bool flushed = bd::gpu::Video::FlushRenderStateLocked(
+      device_guest, pre ? &pre->guest : &guest_state);
+#endif
+  if (!flushed) {
     return; // FlushRenderState logs its own reason
   }
 
@@ -175,13 +197,10 @@ void FitDesignCanvasVertices(u8 *verts, u32 primitiveType, u32 vertexCount,
 void InsetQuadUVs(u8 *verts, u32 vertexCount, u32 vertexStride, UVEdges edges);
 bool IsScreenSpriteQuad(u32 primitiveType, u32 vertexCount, u32 vertexStride);
 
-bool UploadAndBindUpVertices(u32 primitiveType, u32 pVertexData,
-                             u32 vertexCount, u32 vertexStride) {
-  if (!pVertexData || !vertexCount || !vertexStride)
-    return false;
-  const u32 totalSize = vertexCount * vertexStride;
-  auto alloc = bd::gpu::UploadGuestBytesByteSwap32(pVertexData, totalSize,
-                                                   /*alignment=*/4);
+// The uploaded, byte-swapped copy of a draw's UP vertices fitted to the
+// design canvas and bound to stream 0.
+bool BindUpVertices(const bd::gpu::ConstantAllocation &alloc, u32 primitiveType,
+                    u32 pVertexData, u32 vertexCount, u32 vertexStride) {
   if (!alloc.memory)
     return false;
   const bool text_batch = pVertexData == kTextQuadBatchEA;
@@ -193,6 +212,136 @@ bool UploadAndBindUpVertices(u32 primitiveType, u32 pVertexData,
     InsetQuadUVs(alloc.memory, vertexCount, vertexStride, UVEdges::CellSeam);
   bd::gpu::Video::SetVertexStream(0, alloc.ref, alloc.size, vertexStride);
   return true;
+}
+
+bool UploadAndBindUpVertices(u32 primitiveType, u32 pVertexData,
+                             u32 vertexCount, u32 vertexStride) {
+  if (!pVertexData || !vertexCount || !vertexStride)
+    return false;
+  const u32 totalSize = vertexCount * vertexStride;
+  auto alloc = bd::gpu::UploadGuestBytesByteSwap32(pVertexData, totalSize,
+                                                   /*alignment=*/4);
+  return BindUpVertices(alloc, primitiveType, pVertexData, vertexCount,
+                        vertexStride);
+}
+
+// A draw's UP vertices: where the guest has them.
+struct UpVertices {
+  u32 va = 0;
+  u32 count = 0;
+  u32 stride = 0;
+};
+
+#if REBLUE_UBO_CONSTANTS
+// The record a queued draw is carried in: this header, then the captured
+// vertex and pixel constants (registers, then values), then the UP vertices
+// as the guest has them.
+struct QueuedDraw {
+  u32 device_guest;
+  u32 primitive_type;
+  const char *name;
+  DrawArgs args;
+  bd::gpu::GuestDrawState guest;
+  u16 vsRegs, vsCount, psRegs, psCount;
+  UpVertices up;
+  u32 upBytes;
+};
+
+inline u32 Align16(u32 v) { return (v + 15u) & ~15u; }
+#endif
+
+// A draw from the game (render thread plan, stage 2). Inline it is recorded
+// now, as before the queue. Threaded, what it reads of the guest (render
+// state, float constants, UP vertices) is captured here and the recording is
+// queued for the render thread.
+void IssueDraw(u32 device_guest, u32 primitive_type, const char *name,
+               DrawArgs args, const UpVertices *up = nullptr) {
+  if (!bd::gpu::rq::Threaded()) {
+    if (up) {
+      args.is_up = UploadAndBindUpVertices(primitive_type, up->va, up->count,
+                                           up->stride);
+    }
+    DispatchDraw(device_guest, primitive_type, name, args);
+    return;
+  }
+
+#if REBLUE_UBO_CONSTANTS
+  QueuedDraw q{};
+  q.device_guest = device_guest;
+  q.primitive_type = primitive_type;
+  q.name = name;
+  q.args = args;
+  bd::gpu::CaptureGuestDrawState(device_guest, q.guest);
+  const auto &front = bd::gpu::Front();
+  static thread_local bd::gpu::DeltaCapture vs_cap, ps_cap;
+  bd::gpu::CaptureDeltaConstants(bd::gpu::kVertexBank, device_guest,
+                                 bd::gpu::FloatConstantBytes(front.vs),
+                                 front.vs, vs_cap);
+  bd::gpu::CaptureDeltaConstants(bd::gpu::kPixelBank, device_guest,
+                                 bd::gpu::FloatConstantBytes(front.ps),
+                                 front.ps, ps_cap);
+  q.vsRegs = vs_cap.regs;
+  q.vsCount = vs_cap.count;
+  q.psRegs = ps_cap.regs;
+  q.psCount = ps_cap.count;
+  const u8 *up_src = nullptr;
+  if (up && up->va && up->count && up->stride) {
+    up_src = bd::mem::at<const u8>(up->va);
+    if (up_src) {
+      q.up = *up;
+      q.upBytes = up->count * up->stride;
+    }
+  }
+
+  const u32 head = Align16(u32(sizeof(QueuedDraw)));
+  const u32 vs_regs_bytes = Align16(q.vsCount * 2u);
+  const u32 ps_regs_bytes = Align16(q.psCount * 2u);
+  const u32 size = head + vs_regs_bytes + q.vsCount * 16u + ps_regs_bytes +
+                   q.psCount * 16u + Align16(q.upBytes);
+  static thread_local std::vector<u8> scratch;
+  if (scratch.size() < size)
+    scratch.resize(size);
+  u8 *p = scratch.data();
+  std::memcpy(p, &q, sizeof(q));
+  u8 *at = p + head;
+  std::memcpy(at, vs_cap.reg, q.vsCount * 2u);
+  at += vs_regs_bytes;
+  std::memcpy(at, vs_cap.values, q.vsCount * 16u);
+  at += q.vsCount * 16u;
+  std::memcpy(at, ps_cap.reg, q.psCount * 2u);
+  at += ps_regs_bytes;
+  std::memcpy(at, ps_cap.values, q.psCount * 16u);
+  at += q.psCount * 16u;
+  if (q.upBytes)
+    std::memcpy(at, up_src, q.upBytes);
+
+  bd::gpu::rq::RunWithBytes(p, size, [](const u8 *data, u32 /*size*/) {
+    QueuedDraw q;
+    std::memcpy(&q, data, sizeof(q));
+    const u32 head = Align16(u32(sizeof(QueuedDraw)));
+    const u8 *at = data + head;
+    DrawCapture pre;
+    pre.guest = q.guest;
+    pre.vs = {q.vsRegs, q.vsCount, reinterpret_cast<const u16 *>(at),
+              at + Align16(q.vsCount * 2u)};
+    at += Align16(q.vsCount * 2u) + q.vsCount * 16u;
+    pre.ps = {q.psRegs, q.psCount, reinterpret_cast<const u16 *>(at),
+              at + Align16(q.psCount * 2u)};
+    at += Align16(q.psCount * 2u) + q.psCount * 16u;
+    // Taken in before anything can drop the draw: the capture has moved the
+    // guest's registers past these values already.
+    bd::gpu::AbsorbDeltaConstants(bd::gpu::kVertexBank, pre.vs);
+    bd::gpu::AbsorbDeltaConstants(bd::gpu::kPixelBank, pre.ps);
+    pre.vs.count = 0;
+    pre.ps.count = 0;
+    if (q.upBytes) {
+      auto alloc = bd::gpu::UploadBytesByteSwap32(at, q.upBytes, 4);
+      q.args.is_up = BindUpVertices(alloc, q.primitive_type, q.up.va,
+                                    q.up.count, q.up.stride);
+    }
+    DispatchDraw(q.device_guest, q.primitive_type, q.name, q.args, &pre);
+  });
+#endif
 }
 
 // Zooming an event sprite about an off-canvas pivot retreats the authored art
@@ -260,11 +409,19 @@ void InsetOverscanScreenSprite(u32 pVertexData, u32 primitiveType,
   if (!IsScreenSpriteQuad(primitiveType, vertexCount, vertexStride))
     return;
 
-  const auto *tex = bd::gpu::state().textures[0];
-  if (!tex)
+  u32 width = 0, height = 0;
+  if (bd::gpu::rq::Threaded()) {
+    // The render thread owns VideoState: the size the issuing side noted.
+    width = bd::gpu::Front().texture0Width;
+    height = bd::gpu::Front().texture0Height;
+  } else if (const auto *tex = bd::gpu::state().textures[0]) {
+    width = tex->width;
+    height = tex->height;
+  }
+  if (!width || !height)
     return;
-  const auto tex_w = static_cast<float>(tex->width);
-  const auto tex_h = static_cast<float>(tex->height);
+  const auto tex_w = static_cast<float>(width);
+  const auto tex_h = static_cast<float>(height);
   if (tex_w <= bd::gpu::kDesignCanvasWidth ||
       tex_h <= bd::gpu::kDesignCanvasHeight)
     return;
@@ -441,14 +598,11 @@ u32 D3DDevice_DrawVerticesUP_hook(u32 device_guest, u32 primitiveType,
                                   u32 vertexStride) {
   InsetOverscanScreenSprite(pVertexData, primitiveType, vertexCount,
                             vertexStride);
-  const bool ok =
-      UploadAndBindUpVertices(primitiveType, pVertexData, vertexCount,
-                              vertexStride);
   DrawArgs args{};
-  args.is_up = ok;
   args.vertexOrIndexCount = vertexCount;
   args.startVertex = 0;
-  DispatchDraw(device_guest, primitiveType, "DrawVerticesUP", args);
+  const UpVertices up{pVertexData, vertexCount, vertexStride};
+  IssueDraw(device_guest, primitiveType, "DrawVerticesUP", args, &up);
   return 0;
 }
 
@@ -507,13 +661,11 @@ u32 D3DDevice_EndVertices_hook(u32 /*device_guest*/) {
   if (!p.data_va || !p.vertex_count)
     return 0;
 
-  const bool ok = UploadAndBindUpVertices(p.primitive_type, p.data_va,
-                                         p.vertex_count, p.stride);
   DrawArgs args{};
-  args.is_up = ok;
   args.vertexOrIndexCount = p.vertex_count;
   args.startVertex = 0;
-  DispatchDraw(p.device, p.primitive_type, "BeginVertices", args);
+  const UpVertices up{p.data_va, p.vertex_count, p.stride};
+  IssueDraw(p.device, p.primitive_type, "BeginVertices", args, &up);
   return 0;
 }
 
@@ -527,7 +679,7 @@ u32 D3DDevice_DrawIndexedVertices_hook(u32 device_guest, u32 primitiveType,
   args.vertexOrIndexCount = indexCount;
   args.baseVertexIndex = static_cast<i32>(baseVertexIndex);
   args.startIndex = startIndex;
-  DispatchDraw(device_guest, primitiveType, "DrawIndexedVertices", args);
+  IssueDraw(device_guest, primitiveType, "DrawIndexedVertices", args);
   return 0;
 }
 
@@ -548,8 +700,10 @@ u32 D3DDevice_Resolve_hook(u32 /*device_guest*/, u32 Flags, u32 /*pSourceRect*/,
     }
     return 0;
   }
-  bd::gpu::Video::TrackResolveSource(Flags, dst, DestLevel, DestSliceOrFace);
-  bd::gpu::Video::ResolveRtToTexture(dst);
+  bd::gpu::rq::Run([=] {
+    bd::gpu::Video::TrackResolveSource(Flags, dst, DestLevel, DestSliceOrFace);
+    bd::gpu::Video::ResolveRtToTexture(dst);
+  });
   return 0;
 }
 
@@ -565,8 +719,10 @@ u32 D3DDevice_BeginTiling_hook(u32 /*device_guest*/, u32 /*Flags*/,
     color_argb = (pack(color_vec[3]) << 24) | (pack(color_vec[0]) << 16) |
                  (pack(color_vec[1]) << 8) | (pack(color_vec[2]) << 0);
   }
-  bd::gpu::Video::Clear(bd::gpu::kClearAll, color_argb, float(ClearZ),
-                        ClearStencil);
+  const float z = float(ClearZ);
+  bd::gpu::rq::Run([=] {
+    bd::gpu::Video::Clear(bd::gpu::kClearAll, color_argb, z, ClearStencil);
+  });
   return 0;
 }
 
@@ -589,8 +745,10 @@ u32 D3DDevice_EndTiling_hook(u32 /*device_guest*/, u32 ResolveFlags,
     }
     return 0;
   }
-  bd::gpu::Video::TrackResolveSource(ResolveFlags, dst);
-  bd::gpu::Video::ResolveRtToTexture(dst);
+  bd::gpu::rq::Run([=] {
+    bd::gpu::Video::TrackResolveSource(ResolveFlags, dst);
+    bd::gpu::Video::ResolveRtToTexture(dst);
+  });
   return 0;
 }
 
@@ -599,7 +757,7 @@ u32 D3DDevice_DrawVertices_hook(u32 device_guest, u32 primitiveType,
   DrawArgs args{};
   args.vertexOrIndexCount = vertexCount;
   args.startVertex = startVertex;
-  DispatchDraw(device_guest, primitiveType, "DrawVertices", args);
+  IssueDraw(device_guest, primitiveType, "DrawVertices", args);
   return 0;
 }
 

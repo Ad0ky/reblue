@@ -149,6 +149,7 @@ void ApplyGuestDrawState(VideoState &s, const GuestDrawState &g) {
 // the alpha master enable.
 void CaptureGuestDrawState(u32 device_guest, GuestDrawState &g) {
   g = GuestDrawState{};
+  g.renderPassId = CurrentRenderPassId();
   const auto *dev = bd::mem::at<const D3DDevice>(device_guest);
   if (!dev)
     return;
@@ -188,7 +189,9 @@ bool Video::FlushRenderState(u32 device_guest) {
 }
 
 bool Video::FlushRenderStateLocked(u32 device_guest,
-                                   const GuestDrawState *captured) {
+                                   const GuestDrawState *captured,
+                                   const DeltaCaptureView *vs_constants,
+                                   const DeltaCaptureView *ps_constants) {
   auto &s = state();
   // A confirmed device-removed event is terminal: stop recording so the render
   // thread cannot race the fatal dialog into a crash.
@@ -277,7 +280,7 @@ bool Video::FlushRenderStateLocked(u32 device_guest,
     // 'built' means this draw compiled the PSO synchronously, so neither
     // residual nor predictor covered it. Warns once per pipeline, and
     // REBLUE_PSO_CAP builds also capture it for the residual/template tooling.
-    RecordPipelineState(lookup, CurrentRenderPassId(), built);
+    RecordPipelineState(lookup, captured->renderPassId, built);
     s.command_list->setPipeline(pso);
     s.current_pso = pso;
   } else if (!s.current_pso) {
@@ -295,10 +298,17 @@ bool Video::FlushRenderStateLocked(u32 device_guest,
     // deko3d: the banks are updated in place, only the registers the setters
     // touched (constant_buffers.h). Every draw: a clean stage costs a few
     // register reads.
-    PushDeltaConstants(s.command_list, kVertexBank, device_guest,
-                       FloatConstantBytes(s.pipelineState.vertexShader));
-    PushDeltaConstants(s.command_list, kPixelBank, device_guest,
-                       FloatConstantBytes(s.pipelineState.pixelShader));
+    if (vs_constants && ps_constants) {
+      ApplyDeltaConstants(s.command_list, kVertexBank, *vs_constants);
+      ApplyDeltaConstants(s.command_list, kPixelBank, *ps_constants);
+    } else {
+      PushDeltaConstants(s.command_list, kVertexBank, device_guest,
+                         FloatConstantBytes(s.pipelineState.vertexShader),
+                         s.pipelineState.vertexShader);
+      PushDeltaConstants(s.command_list, kPixelBank, device_guest,
+                         FloatConstantBytes(s.pipelineState.pixelShader),
+                         s.pipelineState.pixelShader);
+    }
     if (PushDeltaShared(s.command_list, device_guest, *captured)) {
       BindDeltaConstants(s.command_list, ConstantAllocation{});
     } else {

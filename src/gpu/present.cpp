@@ -32,6 +32,7 @@
 #include "gpu/device.h"
 #include "gpu/output.h"
 #include "gpu/pass_timer.h"
+#include "gpu/render_queue.h"
 #include "gpu/settings.h"
 
 #if defined(__SWITCH__)
@@ -122,6 +123,13 @@ public:
               double(bytes) / frames / 1024.0, misses);
     }
 #endif
+    if (rq::Threaded()) {
+      u64 issued = 0, syncs = 0, sync_us = 0, full = 0;
+      rq::Stats(issued, syncs, sync_us, full);
+      BD_INFO("[render-queue] per frame: {:.0f} records, {:.1f} waits for the render thread ({:.2f} ms) | queue "
+              "full in the window: {}",
+              double(issued) / frames, double(syncs) / frames, double(sync_us) / frames / 1000.0, full);
+    }
   }
   u64 dk_last_[12] = {};
 #endif
@@ -338,6 +346,8 @@ void Video::RequestResize() {
 }
 
 void Video::Present(GuestTexture *frontBuffer) {
+  // Every draw issued before it recorded (render thread plan, stage 2).
+  rq::SyncIfThreaded();
   auto &s = state();
   if (s.shutting_down.load(std::memory_order_acquire))
     return;
@@ -471,6 +481,8 @@ void Video::Present(GuestTexture *frontBuffer) {
 }
 
 void Video::SkipPresent() {
+  // Every draw issued before it recorded (render thread plan, stage 2).
+  rq::SyncIfThreaded();
   auto &s = state();
   if (s.shutting_down.load(std::memory_order_acquire))
     return;
@@ -483,6 +495,8 @@ void Video::SkipPresent() {
 }
 
 void Video::PresentOverlayFrame() {
+  // Every draw issued before it recorded (render thread plan, stage 2).
+  rq::SyncIfThreaded();
   auto &s = state();
   if (s.shutting_down.load(std::memory_order_acquire))
     return;

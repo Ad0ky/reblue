@@ -27,6 +27,7 @@
 #include "gpu/device.h"
 #include "gpu/host_resource_heap.h"
 #include "gpu/output.h"
+#include "gpu/render_queue.h"
 #include "gpu/settings.h"
 
 namespace {
@@ -162,7 +163,8 @@ void bdReflectionTextureSeedHook(PPCRegister &r3) {
   if (!texture)
     return;
   texture->reflection = true;
-  bd::gpu::Video::ClearTexture(texture, kOpaqueBlackArgb);
+  bd::gpu::rq::Run(
+      [texture] { bd::gpu::Video::ClearTexture(texture, kOpaqueBlackArgb); });
 }
 
 // The light frustum is world-space and receivers sample by UV, so a larger map
@@ -182,6 +184,7 @@ void bdShadowMapTextureResizeHook(PPCRegister &r31) {
   if (!texture)
     return;
   const u32 d = static_cast<u32>(bd::gpu::Settings::Get().ShadowDimension());
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   bd::gpu::Video::ResizeTexture(texture, d, d);
 }
 

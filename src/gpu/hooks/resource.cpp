@@ -28,6 +28,7 @@
 #include "gpu/native_texture_mirror.h"
 #include "gpu/output.h"
 #include "gpu/physical_buffers.h"
+#include "gpu/render_queue.h"
 #include "gpu/surface_registry.h"
 #include "gpu/texture_upload.h"
 
@@ -62,6 +63,7 @@ bd::gpu::GuestTexture *D3DDevice_CreateSurface_hook(u32 width, u32 height,
                                                     u32 format,
                                                     u32 multi_sample,
                                                     u32 params_va) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   const plume::RenderSampleCounts msaa_count =
       (multi_sample != 0 && IsFullFrameScene(width, height) &&
        bd::gpu::Video::CvarMSAASampleCount() !=
@@ -81,6 +83,7 @@ bd::gpu::GuestTexture *D3DDevice_CreateTexture_hook(u32 width, u32 height,
                                                     u32 usage, u32 format,
                                                     u32 /*pool*/,
                                                     u32 d3d_type) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   // d3d_type: 17=D3DRTYPE_VOLUMETEXTURE -> 3D, 18=D3DRTYPE_CUBETEXTURE -> cube
   // (Texture type, 2D dimension + arraySize 6 + CUBE flag), else plain 2D.
   const bool is_volume = (d3d_type == 17);
@@ -182,6 +185,7 @@ bd::gpu::GuestTexture *D3DDevice_CreateTexture_hook(u32 width, u32 height,
 bd::gpu::GuestBuffer *D3DDevice_CreateVertexBuffer_hook(u32 length,
                                                         u32 /*usage*/, u32 fvf,
                                                         u32 /*pool*/) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   auto *b = bd::gpu::HostResourceHeap::Alloc<bd::gpu::GuestBuffer>(
       bd::gpu::ResourceType::VertexBuffer);
   if (!b) {
@@ -213,6 +217,7 @@ bd::gpu::GuestBuffer *D3DDevice_CreateIndexBuffer_hook(u32 length,
                                                        u32 /*usage*/,
                                                        u32 format,
                                                        u32 /*pool*/) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   auto *b = bd::gpu::HostResourceHeap::Alloc<bd::gpu::GuestBuffer>(
       bd::gpu::ResourceType::IndexBuffer);
   if (!b) {
@@ -246,6 +251,7 @@ bd::gpu::GuestBuffer *D3DDevice_CreateIndexBuffer_hook(u32 length,
 
 u32 D3DVertexBuffer_Lock_hook(u32 buffer, u32 offset_to_lock, u32 size_to_lock,
                               u32 flags) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   auto *b = bd::gpu::HostResourceHeap::FromGuest<bd::gpu::GuestBuffer>(buffer);
   // Physical VBs wrap an engine-owned struct FromGuest misses, so resolve it
   // like SetStreamSource. The mirror reflection plane fetch
@@ -262,6 +268,7 @@ u32 D3DVertexBuffer_Lock_hook(u32 buffer, u32 offset_to_lock, u32 size_to_lock,
 
 u32 D3DIndexBuffer_Lock_hook(u32 buffer, u32 offset_to_lock, u32 size_to_lock,
                              u32 flags) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   auto *b = bd::gpu::HostResourceHeap::FromGuest<bd::gpu::GuestBuffer>(buffer);
   // Same physical buffer struct VA miss as the VB path, so resolve like
   // SetIndices.
@@ -312,12 +319,14 @@ void UnlockGuestBuffer(bd::gpu::GuestBuffer *b, u32 stride_bytes) {
 }
 
 u32 D3DVertexBuffer_Unlock_hook(u32 buffer) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   auto *b = bd::gpu::HostResourceHeap::FromGuest<bd::gpu::GuestBuffer>(buffer);
   UnlockGuestBuffer(b, /*stride_bytes=*/4);
   return 0;
 }
 
 u32 D3DIndexBuffer_Unlock_hook(u32 buffer) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   auto *b = bd::gpu::HostResourceHeap::FromGuest<bd::gpu::GuestBuffer>(buffer);
   const u32 stride = (b && b->guestFormat == 1 /*D3DFMT_INDEX16*/) ? 2u : 4u;
   UnlockGuestBuffer(b, stride);
@@ -365,6 +374,7 @@ u32 ReleaseSurfaceLevel(rex::MappedPtr<bd::gpu::D3DResource> res) {
 } // namespace
 
 u32 D3DResource_Release_hook(rex::MappedPtr<bd::gpu::D3DResource> res) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   if (!res)
     return 0;
   bd::gpu::ResourceType type;
@@ -396,6 +406,7 @@ u32 D3DResource_AddRef_hook(rex::MappedPtr<bd::gpu::D3DResource> res) {
 }
 
 void D3DResource_Destroy_hook(u32 res_guest) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   if (!res_guest)
     return;
   bd::gpu::ResourceType type;
@@ -445,6 +456,7 @@ constexpr u32 kD3DSurfaceAllocSize = 0x30;
 constexpr u32 kD3DSurfaceAllocAlign = 0x10;
 
 u32 D3DTexture_GetSurfaceLevel_hook(u32 texture_guest, u32 level) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   // HostHeap-allocated and tracked, so Release/Destroy free it rather than
   // leak.
   const u32 surface_guest = bd::gpu::HostHeap::Get().AllocGuest(
@@ -488,6 +500,7 @@ u32 FillLockedRectScratch(bd::gpu::GuestTexture *tex,
 void D3DSurface_LockRect_hook(rex::MappedPtr<const bd::gpu::D3DSurface> surface,
                               rex::MappedPtr<bd::gpu::D3DLockedRect> locked,
                               u32 /*rect*/, u32 /*flags*/) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   if (!locked)
     return;
   locked->Pitch = 0;
@@ -507,6 +520,7 @@ void D3DSurface_LockRect_hook(rex::MappedPtr<const bd::gpu::D3DSurface> surface,
 void D3DLineTexture_LockRect_hook(u32 texture_guest, u32 /*level*/,
                                   rex::MappedPtr<bd::gpu::D3DLockedRect> locked,
                                   u32 /*rect*/, u32 /*flags*/) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   if (!locked)
     return;
   locked->Pitch = 0;
@@ -517,6 +531,7 @@ void D3DLineTexture_LockRect_hook(u32 texture_guest, u32 /*level*/,
 }
 
 u32 D3DResource_Unlock_hook(u32 resource, u32 /*a2*/, u32 /*a3*/) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   auto *tex =
       bd::gpu::HostResourceHeap::FromGuest<bd::gpu::GuestTexture>(resource);
   if (tex && tex->mappedMemory) {
@@ -553,6 +568,7 @@ REX_HOOK(D3DTexture_GetSurfaceLevel, D3DTexture_GetSurfaceLevel_hook);
 // host mirror is built and registered for ResolveGuestTexture to find.
 REX_EXTERN(__imp__bdAllocRenderBuffer);
 REX_HOOK_RAW(bdAllocRenderBuffer) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   // r3 is the asset basename, kept so a reject names the dropped texture.
   const u32 name = ctx.r3.u32;
   __imp__bdAllocRenderBuffer(ctx, base);
@@ -569,6 +585,7 @@ REX_HOOK_RAW(bdAllocRenderBuffer) {
 // slot at 0 and are left alone.
 REX_EXTERN(__imp__LoadTexture__vf03);
 REX_HOOK_RAW(LoadTexture__vf03) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   const auto *res = bd::mem::at<const LoadTextureResource>(ctx.r3.u32);
   if (res && u32(res->xphysicalData)) {
     bd::gpu::EvictNativeTexture(res->textureVa);

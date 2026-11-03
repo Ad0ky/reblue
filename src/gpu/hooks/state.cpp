@@ -25,6 +25,7 @@
 #include "gpu/host_resource_heap.h"
 #include "gpu/native_texture_mirror.h"
 #include "gpu/physical_buffers.h"
+#include "gpu/render_queue.h"
 #include "gpu/shaders/shader_constants.h"
 
 namespace {
@@ -38,8 +39,6 @@ void D3DDevice_SetViewport_hook(
     return;
   }
 
-  auto &s = bd::gpu::state();
-
   const float fx = static_cast<float>(u32(pViewport->X));
   const float fy = static_cast<float>(u32(pViewport->Y));
   const float fw = static_cast<float>(u32(pViewport->Width));
@@ -47,21 +46,24 @@ void D3DDevice_SetViewport_hook(
   const float fmin = float(pViewport->MinZ);
   const float fmax = float(pViewport->MaxZ);
 
-  bd::gpu::Video::SetDirtyValue<float>(s.dirtyStates.viewport, s.viewport.x,
-                                       fx);
-  bd::gpu::Video::SetDirtyValue<float>(s.dirtyStates.viewport, s.viewport.y,
-                                       fy);
-  bd::gpu::Video::SetDirtyValue<float>(s.dirtyStates.viewport, s.viewport.width,
-                                       fw);
-  bd::gpu::Video::SetDirtyValue<float>(s.dirtyStates.viewport,
-                                       s.viewport.height, fh);
-  bd::gpu::Video::SetDirtyValue<float>(s.dirtyStates.viewport,
-                                       s.viewport.minDepth, fmin);
-  bd::gpu::Video::SetDirtyValue<float>(s.dirtyStates.viewport,
-                                       s.viewport.maxDepth, fmax);
+  bd::gpu::rq::Run([=] {
+    auto &s = bd::gpu::state();
+    bd::gpu::Video::SetDirtyValue<float>(s.dirtyStates.viewport, s.viewport.x,
+                                         fx);
+    bd::gpu::Video::SetDirtyValue<float>(s.dirtyStates.viewport, s.viewport.y,
+                                         fy);
+    bd::gpu::Video::SetDirtyValue<float>(s.dirtyStates.viewport, s.viewport.width,
+                                         fw);
+    bd::gpu::Video::SetDirtyValue<float>(s.dirtyStates.viewport,
+                                         s.viewport.height, fh);
+    bd::gpu::Video::SetDirtyValue<float>(s.dirtyStates.viewport,
+                                         s.viewport.minDepth, fmin);
+    bd::gpu::Video::SetDirtyValue<float>(s.dirtyStates.viewport,
+                                         s.viewport.maxDepth, fmax);
 
-  s.dirtyStates.scissorRect =
-      s.dirtyStates.scissorRect || s.dirtyStates.viewport;
+    s.dirtyStates.scissorRect =
+        s.dirtyStates.scissorRect || s.dirtyStates.viewport;
+  });
 
   if (pDevice) {
     pDevice->viewport.X = u32(pViewport->X);
@@ -94,27 +96,31 @@ void D3DDevice_SetRenderTarget_hook(
   if (RenderTargetIndex != 0)
     return;
 
-  auto &s = bd::gpu::state();
+  // The guest device's viewport here, the renderer's in the record.
+  bd::gpu::WriteDefaultViewport(pDevice, surface);
+  bd::gpu::rq::Run([surface] {
+    auto &s = bd::gpu::state();
 
-  // FlushRenderState bakes the new RT's format into the PSO, so the cached
-  // framebuffer holding the old RTV has to go with it.
-  if (s.render_target != surface)
-    s.draw_framebuffer_bound = false;
+    // FlushRenderState bakes the new RT's format into the PSO, so the cached
+    // framebuffer holding the old RTV has to go with it.
+    if (s.render_target != surface)
+      s.draw_framebuffer_bound = false;
 
-  bd::gpu::Video::SetDirtyValue<bd::gpu::GuestTexture *>(
-      s.dirtyStates.renderTargetAndDepthStencil, s.render_target, surface);
-  bd::gpu::Video::SetDirtyValue<plume::RenderFormat>(
-      s.dirtyStates.pipelineState, s.pipelineState.renderTargetFormat,
-      surface != nullptr ? surface->format : plume::RenderFormat::UNKNOWN);
-  bd::gpu::Video::SetDirtyValue<plume::RenderSampleCounts>(
-      s.dirtyStates.pipelineState, s.pipelineState.sampleCount,
-      surface != nullptr ? surface->sampleCount
-                         : plume::RenderSampleCount::COUNT_1);
-  // Alpha test mode tied to sample count.
-  bd::gpu::Video::SetAlphaTestMode(
-      (s.pipelineState.specConstants & bd::gpu::kSpecConstantAlphaTest) != 0);
+    bd::gpu::Video::SetDirtyValue<bd::gpu::GuestTexture *>(
+        s.dirtyStates.renderTargetAndDepthStencil, s.render_target, surface);
+    bd::gpu::Video::SetDirtyValue<plume::RenderFormat>(
+        s.dirtyStates.pipelineState, s.pipelineState.renderTargetFormat,
+        surface != nullptr ? surface->format : plume::RenderFormat::UNKNOWN);
+    bd::gpu::Video::SetDirtyValue<plume::RenderSampleCounts>(
+        s.dirtyStates.pipelineState, s.pipelineState.sampleCount,
+        surface != nullptr ? surface->sampleCount
+                           : plume::RenderSampleCount::COUNT_1);
+    // Alpha test mode tied to sample count.
+    bd::gpu::Video::SetAlphaTestMode(
+        (s.pipelineState.specConstants & bd::gpu::kSpecConstantAlphaTest) != 0);
 
-  bd::gpu::Video::SetDefaultViewport(pDevice, surface);
+    bd::gpu::Video::SetDefaultViewport(nullptr, surface);
+  });
 }
 
 void D3DDevice_SetDepthStencilSurface_hook(
@@ -137,26 +143,30 @@ void D3DDevice_SetDepthStencilSurface_hook(
       surface = nullptr;
   }
 
-  auto &s = bd::gpu::state();
+  // The guest device's viewport here, the renderer's in the record.
+  bd::gpu::WriteDefaultViewport(pDevice, surface);
+  bd::gpu::rq::Run([surface] {
+    auto &s = bd::gpu::state();
 
-  // Depth surface change drops the cached framebuffer (same #613 reason as
-  // SetRenderTarget above).
-  if (s.depth_stencil != surface)
-    s.draw_framebuffer_bound = false;
+    // Depth surface change drops the cached framebuffer (same #613 reason as
+    // SetRenderTarget above).
+    if (s.depth_stencil != surface)
+      s.draw_framebuffer_bound = false;
 
-  bd::gpu::Video::SetDirtyValue<bd::gpu::GuestTexture *>(
-      s.dirtyStates.renderTargetAndDepthStencil, s.depth_stencil, surface);
-  bd::gpu::Video::SetDirtyValue<plume::RenderFormat>(
-      s.dirtyStates.pipelineState, s.pipelineState.depthStencilFormat,
-      surface != nullptr ? surface->format : plume::RenderFormat::UNKNOWN);
+    bd::gpu::Video::SetDirtyValue<bd::gpu::GuestTexture *>(
+        s.dirtyStates.renderTargetAndDepthStencil, s.depth_stencil, surface);
+    bd::gpu::Video::SetDirtyValue<plume::RenderFormat>(
+        s.dirtyStates.pipelineState, s.pipelineState.depthStencilFormat,
+        surface != nullptr ? surface->format : plume::RenderFormat::UNKNOWN);
 
-  // Remember the most recent real depth surface for the enhanced DOF
-  // downsample. BD rebinds the 1280 DOF depth here just before the post chain,
-  // so this ends up naming the depth aligned with the 1280 scene resolve.
-  if (surface)
-    s.scene_depth = surface;
+    // Remember the most recent real depth surface for the enhanced DOF
+    // downsample. BD rebinds the 1280 DOF depth here just before the post chain,
+    // so this ends up naming the depth aligned with the 1280 scene resolve.
+    if (surface)
+      s.scene_depth = surface;
 
-  bd::gpu::Video::SetDefaultViewport(pDevice, surface);
+    bd::gpu::Video::SetDefaultViewport(nullptr, surface);
+  });
 }
 
 void D3DDevice_SetScissorRect_hook(
@@ -167,19 +177,21 @@ void D3DDevice_SetScissorRect_hook(
   }
   // Scissor always tracks the viewport extent in FlushViewport, so the rect
   // values are unused, and only the dirty mark matters.
-  bd::gpu::state().dirtyStates.scissorRect = true;
+  bd::gpu::rq::Run([] { bd::gpu::state().dirtyStates.scissorRect = true; });
 }
 
 void D3DDevice_SetVertexShader_hook(u32 /*device*/, u32 shader_guest) {
   auto *shader =
       bd::gpu::HostResourceHeap::FromGuest<bd::gpu::GuestShader>(shader_guest);
-  bd::gpu::Video::SetVertexShader(shader);
+  bd::gpu::Front().vs = shader;
+  bd::gpu::rq::Run([shader] { bd::gpu::Video::SetVertexShader(shader); });
 }
 
 void D3DDevice_SetPixelShader_hook(u32 /*device*/, u32 shader_guest) {
   auto *shader =
       bd::gpu::HostResourceHeap::FromGuest<bd::gpu::GuestShader>(shader_guest);
-  bd::gpu::Video::SetPixelShader(shader);
+  bd::gpu::Front().ps = shader;
+  bd::gpu::rq::Run([shader] { bd::gpu::Video::SetPixelShader(shader); });
 }
 
 void D3DDevice_SetVertexDeclaration_hook(u32 /*device*/, u32 decl_guest) {
@@ -189,7 +201,7 @@ void D3DDevice_SetVertexDeclaration_hook(u32 /*device*/, u32 decl_guest) {
 
   // The recompiled VS guards its R11G11B10/SNORM decode on this bit, else it
   // asfloat()s the normal bits to garbage.
-  {
+  bd::gpu::rq::Run([decl] {
     auto &s = bd::gpu::state();
     u32 spec =
         s.pipelineState.specConstants & ~bd::gpu::kSpecConstantR11G11B10Normal;
@@ -197,9 +209,8 @@ void D3DDevice_SetVertexDeclaration_hook(u32 /*device*/, u32 decl_guest) {
       spec |= bd::gpu::kSpecConstantR11G11B10Normal;
     bd::gpu::Video::SetDirtyValue<u32>(s.dirtyStates.pipelineState,
                                        s.pipelineState.specConstants, spec);
-  }
-
-  bd::gpu::Video::SetVertexDeclaration(decl);
+    bd::gpu::Video::SetVertexDeclaration(decl);
+  });
 }
 
 void D3DDevice_SetTexture_hook(u32 /*device*/, u32 sampler, u32 texture_guest) {
@@ -209,7 +220,11 @@ void D3DDevice_SetTexture_hook(u32 /*device*/, u32 sampler, u32 texture_guest) {
     // Unresolved (e.g. outside the supported native format set): green marker.
     tex = bd::gpu::GetOrCreateDebugTexture();
   }
-  bd::gpu::Video::SetTexture(sampler, tex);
+  if (sampler == 0 && tex) {
+    bd::gpu::Front().texture0Width = tex->width;
+    bd::gpu::Front().texture0Height = tex->height;
+  }
+  bd::gpu::rq::Run([sampler, tex] { bd::gpu::Video::SetTexture(sampler, tex); });
 }
 
 void D3DDevice_SetStreamSource_hook(u32 /*device*/, u32 stream,
@@ -225,14 +240,16 @@ void D3DDevice_SetStreamSource_hook(u32 /*device*/, u32 stream,
     buf =
         ResolveGuestBufferVa(buffer_guest, bd::gpu::ResourceType::VertexBuffer);
   }
+  plume::RenderBufferReference ref{};
+  u32 bound_size = 0, bound_stride = 0;
   if (buf && buf->hasBuffer()) {
-    auto ref = buf->bufferRef(offset);
-    const u32 bound_size = offset < buf->dataSize ? buf->dataSize - offset : 0;
-    bd::gpu::Video::SetVertexStream(stream, ref, bound_size, stride);
-  } else {
-    bd::gpu::Video::SetVertexStream(stream, plume::RenderBufferReference{}, 0,
-                                    0);
+    ref = buf->bufferRef(offset);
+    bound_size = offset < buf->dataSize ? buf->dataSize - offset : 0;
+    bound_stride = stride;
   }
+  bd::gpu::rq::Run([=] {
+    bd::gpu::Video::SetVertexStream(stream, ref, bound_size, bound_stride);
+  });
 }
 
 void D3DDevice_SetIndices_hook(u32 /*device*/, u32 indices_guest) {
@@ -245,7 +262,7 @@ void D3DDevice_SetIndices_hook(u32 /*device*/, u32 indices_guest) {
     ib =
         ResolveGuestBufferVa(indices_guest, bd::gpu::ResourceType::IndexBuffer);
   }
-  bd::gpu::Video::SetIndices(ib);
+  bd::gpu::rq::Run([ib] { bd::gpu::Video::SetIndices(ib); });
 }
 
 // SetSamplerState is deliberately NOT hooked: its recompiled body writes the
@@ -345,10 +362,12 @@ REX_HOOK_RAW(bdSetRenderState) {
   // hook can't. Only alpha test feeds SharedConstants: it is fixed-function ROP
   // on X360, and the recompiled PS clips on kSpecConstantAlphaTest instead.
   if (offset == kRsAlphaTestEnable) {
-    bd::gpu::Video::SetAlphaTestMode(value != 0);
+    bd::gpu::rq::Run([value] { bd::gpu::Video::SetAlphaTestMode(value != 0); });
   } else if (offset == kRsAlphaRef) {
-    bd::gpu::Video::SetAlphaThreshold(static_cast<float>(value) *
-                                      kAlphaRefScale);
+    bd::gpu::rq::Run([value] {
+      bd::gpu::Video::SetAlphaThreshold(static_cast<float>(value) *
+                                        kAlphaRefScale);
+    });
   }
   REBLUE_HOT_CALL(bdSetRenderState)(ctx, base);
 }

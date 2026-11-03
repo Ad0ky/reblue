@@ -24,6 +24,7 @@
 #include "gpu/d3d.h"
 #include "gpu/device.h"
 #include "gpu/host_resource_heap.h"
+#include "gpu/render_queue.h"
 #include "gpu/settings.h"
 #include "gpu/hooks/tweaks.h"
 
@@ -193,6 +194,7 @@ void RebuildForOutputSize(rex::CallFrame &frame, u8 *base, u32 w, u32 h) {
 
 REX_EXTERN(__imp__bdCreateRenderTargetTextures);
 REX_HOOK_RAW(bdCreateRenderTargetTextures) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   u32 w = 0;
   u32 h = 0;
   if (Output::RenderSize(w, h)) {
@@ -298,6 +300,7 @@ void bdViewProjectionAspectHook(PPCRegister &r31, PPCRegister &fov_half,
 // at ThreadState's r1 and overwrites the frames live underneath it.
 REX_EXTERN(__imp__VisualRender__ctor);
 REX_HOOK_RAW(VisualRender__ctor) {
+  bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
   const u32 self = ctx.r3.u32;
   __imp__VisualRender__ctor(ctx, base);
   if (!self)
@@ -450,10 +453,10 @@ REX_HOOK_RAW(bdRenderSubmitList) {
     *vh = kDesignCanvasHeight;
   }
   if (pin)
-    bd::gpu::Video::SetDesignCanvasDrain(true);
+    bd::gpu::rq::Run([] { bd::gpu::Video::SetDesignCanvasDrain(true); });
   __imp__bdRenderSubmitList(ctx, base);
   if (pin)
-    bd::gpu::Video::SetDesignCanvasDrain(false);
+    bd::gpu::rq::Run([] { bd::gpu::Video::SetDesignCanvasDrain(false); });
   if (pin) {
     *vw = saved_w;
     *vh = saved_h;

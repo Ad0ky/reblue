@@ -223,6 +223,34 @@ What the build does already:
   Vulkan pipeline built so far (each one costs ~60 ms to build on NVK). The
   first run builds them, later runs read them. Delete the file to start over.
 
+### Render thread plan
+
+In the slow scenes the game's Draw Thread is busy all the time, and close to
+half of that is the renderer recording the draws (shader constants, the shared
+texture/sampler block, bindings, framebuffers). The plan moves the recording to
+a thread of its own, so the game prepares the next draws while the previous
+ones are recorded on another core.
+
+1. **Guest reads at the draw** (done). Everything a draw reads of guest memory
+   is captured when the game issues it: the render state registers and BD's
+   render state cache, the float constants that may have changed, the fetch
+   (sampler) and bool constants, the render pass id (`CaptureGuestDrawState`,
+   `CaptureDeltaConstants`). Recording reads only the capture.
+2. **The queue** (`gpu/render_queue.cpp`). The D3D calls that set the draw
+   state (targets, viewport, shaders, vertex declaration, textures, streams,
+   indices, alpha test), the draws, clears, resolves, occlusion queries and the
+   2D canvas drain are records: run at once inline, or copied into a ring for
+   the render thread. A draw's record carries its capture and its UP vertices.
+   Every other D3D call (resource creation, locks, releases, Present) first
+   waits until the queue is empty, so it finds the renderer as it would have
+   inline. `bd_render_thread` (default **off**) picks the mode at start-up; it
+   needs the in-place constants. Threaded, the log gets a `[render-queue]` line
+   every 10 s: records per frame and how often and how long the game waited.
+3. **Turning it on** and measuring; Present queued too, so a frame's recording
+   can overlap the next frame's game work.
+4. **Draw-path work** on the render thread (shared block skipped when nothing
+   it reads changed, fewer lock round trips).
+
 ### Profile-guided optimisation
 
 GCC can optimise the game code and re:Blue's from what actually runs: hot paths

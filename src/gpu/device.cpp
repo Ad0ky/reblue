@@ -49,6 +49,7 @@
 #include "gpu/host_resource_heap.h"
 #include "gpu/output.h"
 #include "gpu/pipeline/pso_recorder.h"
+#include "gpu/render_queue.h"
 #include "gpu/settings.h"
 #include "gpu/surface_registry.h"
 #include "platform/platform.h"
@@ -565,6 +566,8 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
   // Background-precompile the static PSO cache. Entries whose shaders/decls do
   // not exist yet are deferred until CreateShader/CreateVertexDeclaration.
   ReplayBootCache();
+  // The render thread, when bd_render_thread asks for it (render thread plan).
+  rq::Start();
   return true;
 }
 
@@ -652,6 +655,7 @@ void Video::BeginShutdown() {
   // the UI thread, which is the thread running the shutdown) holds s.mutex, so
   // taking it here would deadlock stage 1 of the sequence.
   state().shutting_down.store(true, std::memory_order_release);
+  rq::Abandon();
 }
 
 void Video::Shutdown(const std::function<void()> &ui_pump) {

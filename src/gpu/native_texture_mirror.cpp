@@ -24,6 +24,7 @@
 
 #include "core/logging.h"
 #include "core/memory_helpers.h"
+#include "gpu/render_queue.h"
 #include "gpu/d3d.h"
 #include "gpu/device.h"
 #include "gpu/host_resource_heap.h"
@@ -597,6 +598,7 @@ std::vector<NativeTextureRef> NativeTexturesByName(std::string_view name) {
 }
 
 bool NativeTextureReplace(u32 guest_va, const u8 *blob, size_t size) {
+  rq::SyncIfThreaded(); // render thread plan: not queued
   if (!blob || size < 2048u)
     return false;
   const auto *d3dtex = bd::mem::at<const D3DTexture>(guest_va);

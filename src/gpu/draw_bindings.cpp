@@ -17,6 +17,7 @@
 
 #include <plume_render_interface.h>
 
+#include "gpu/render_queue.h"
 #include "gpu/shaders/shader_constants.h"
 
 namespace bd::gpu {
@@ -135,6 +136,10 @@ void Video::SetVertexStream(u32 slot, plume::RenderBufferReference buffer,
 }
 
 void Video::MarkVSConstantsDirty() {
+  // Threaded (render thread plan): only the in-place constants, which do not
+  // read this flag, and VideoState is the render thread's.
+  if (rq::Threaded())
+    return;
   auto &s = state();
   // The game sets constants a few registers at a time, many calls per draw,
   // and the flag is cleared only by FlushRenderStateLocked: once it is set,
@@ -147,6 +152,10 @@ void Video::MarkVSConstantsDirty() {
 }
 
 void Video::MarkPSConstantsDirty() {
+  // Threaded (render thread plan): only the in-place constants, which do not
+  // read this flag, and VideoState is the render thread's.
+  if (rq::Threaded())
+    return;
   auto &s = state();
   // The game sets constants a few registers at a time, many calls per draw,
   // and the flag is cleared only by FlushRenderStateLocked: once it is set,
@@ -212,6 +221,17 @@ void Video::SetDefaultViewport(D3DDevice *device, GuestTexture *surface) {
     device->viewport.MinZ = 0.0f;
     device->viewport.MaxZ = 1.0f;
   }
+}
+
+void WriteDefaultViewport(D3DDevice *device, GuestTexture *surface) {
+  if (device == nullptr || surface == nullptr)
+    return;
+  device->viewport.X = 0;
+  device->viewport.Y = 0;
+  device->viewport.Width = surface->width;
+  device->viewport.Height = surface->height;
+  device->viewport.MinZ = 0.0f;
+  device->viewport.MaxZ = 1.0f;
 }
 
 void Video::SetDesignCanvasDrain(bool on) { state().design_canvas_drain = on; }

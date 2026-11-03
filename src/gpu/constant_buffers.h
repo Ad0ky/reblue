@@ -137,9 +137,39 @@ bool DeltaConstantsEnabled();
 // written. The in-place update looks only at these (plus a few the engine
 // writes inline, and a sampled check of the rest).
 void MarkConstantRegisters(ConstantBank bank, u32 start, u32 count);
-// The first 'bytes' of the bank from the guest device; false if not done.
+// The in-place update in two halves (render thread plan, docs/SWITCH.md):
+// the capture reads the guest's registers that may have changed, on the
+// thread that issues the draw; the apply lowers them and records the pushes,
+// on the thread that records it, reading only the capture.
+struct DeltaCapture {
+  u16 regs = 0;  // registers the shader reads
+  u16 count = 0; // captured registers below
+  u16 reg[256];
+  alignas(16) u8 values[256][16]; // as the guest has them (big-endian)
+};
+// A capture as the render queue carries it: the same, packed.
+struct DeltaCaptureView {
+  u16 regs = 0;
+  u16 count = 0;
+  const u16 *reg = nullptr;
+  const u8 *values = nullptr; // count * 16 bytes
+};
+inline DeltaCaptureView View(const DeltaCapture &c) {
+  return {c.regs, c.count, c.reg, &c.values[0][0]};
+}
+// The first 'bytes' of the bank from the guest device ('shader' names the
+// shader in the log when a register changes without a setter). False if not
+// done.
+bool CaptureDeltaConstants(ConstantBank bank, u32 device_guest, u32 bytes,
+                           const GuestShader *shader, DeltaCapture &out);
+// Takes the capture in (the GPU copy gets it with the next apply); the apply
+// does this first itself. For a draw that may be dropped before its apply.
+void AbsorbDeltaConstants(ConstantBank bank, const DeltaCaptureView &capture);
+bool ApplyDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
+                         const DeltaCaptureView &capture);
+// Both halves at once.
 bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
-                        u32 device_guest, u32 bytes);
+                        u32 device_guest, u32 bytes, const GuestShader *shader);
 // The shared block (texture and sampler indices, bool constants...) kept in
 // place too: built from the live state, its changed registers pushed, bound at
 // slot 2. False if not done (the caller uploads it as before).
@@ -165,6 +195,10 @@ ConstantAllocation UploadGuestBytesByteSwap32(u32 guest_va, u32 size,
 
 // Verbatim, no swap, for texture pixel data.
 ConstantAllocation UploadGuestBytes(u32 guest_va, u32 size, u32 alignment = 4);
+// UploadGuestBytesByteSwap32 from a copy of the guest's bytes (the render
+// queue carries the copy, gpu/render_queue.h).
+ConstantAllocation UploadBytesByteSwap32(const u8 *bytes, u32 size,
+                                         u32 alignment = 4);
 
 // For pixel data already untiled to host staging.
 ConstantAllocation UploadHostBytes(const void *host_data, u32 size,

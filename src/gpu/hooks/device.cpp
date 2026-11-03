@@ -27,6 +27,7 @@
 #include "gpu/device.h"
 #include "gpu/host_resource_heap.h"
 #include "gpu/occlusion.h"
+#include "gpu/render_queue.h"
 
 namespace {
 
@@ -38,7 +39,8 @@ namespace {
 u32 D3DDevice_Clear_hook(u32 /*device*/, u32 /*count*/, u32 /*rects*/,
                          u32 flags, u32 color, f64 z, u32 /*z_gpr_slot*/,
                          u32 stencil, u32 /*edram_clear*/) {
-  bd::gpu::Video::Clear(flags, color, float(z), stencil);
+  const float zf = float(z);
+  bd::gpu::rq::Run([=] { bd::gpu::Video::Clear(flags, color, zf, stencil); });
   return 0;
 }
 
@@ -55,7 +57,8 @@ void bdBuildGammaRampLUT_hook(mapped_f32 sub, mapped_f32 mul) {
   for (int ch = 0; ch < 3; ++ch) {
     g += (2.0f - s[ch]) * m[ch];
   }
-  bd::gpu::state().guest_gamma = g / 6.0f;
+  const float gamma = g / 6.0f;
+  bd::gpu::rq::Run([gamma] { bd::gpu::state().guest_gamma = gamma; });
 }
 
 // D3DDevice_Swap(D3DDevice*, D3DBaseTexture* pFrontBuffer, scaler params).
@@ -66,6 +69,9 @@ u32 D3DDevice_Swap_hook(u32 /*device*/, u32 front_buffer_va,
   auto *front_buffer =
       bd::gpu::HostResourceHeap::FromGuest<bd::gpu::GuestTexture>(
           front_buffer_va);
+  // Stage 2 of the render thread plan: the frame ends with every draw of it
+  // recorded (Present itself is not queued yet).
+  bd::gpu::rq::SyncIfThreaded();
   if (bd::engine::SparseFrame())
     bd::gpu::Video::SkipPresent();
   else
@@ -78,9 +84,9 @@ u32 D3DQuery_Issue_hook(u32 /*pThis*/, u32 dwIssueFlags) {
   // occlusion test quad, so drive the GPU occlusion counter and the lens flare
   // fades behind geometry. See Occlusion::Begin/End.
   if (dwIssueFlags == 2) {
-    bd::gpu::Occlusion::Begin();
+    bd::gpu::rq::Run([] { bd::gpu::Occlusion::Begin(); });
   } else if (dwIssueFlags == 1) {
-    bd::gpu::Occlusion::End();
+    bd::gpu::rq::Run([] { bd::gpu::Occlusion::End(); });
   }
   return 0;
 }
@@ -91,6 +97,7 @@ u32 D3DQuery_GetData_hook(u32 /*pThis*/, rex::MappedPtr<u8> pData, u32 size,
   // from dword[0] (low) + dword[3] (high), /16384.0 (128x128 test quad) -> 0..1
   // fraction-of-sun-visible scaling the lens flare. The high dword MUST stay 0:
   // nonzero overflows the count -> flare alpha NaN -> ghost quads render black.
+  bd::gpu::rq::SyncIfThreaded();
   if (pData && size >= 16) {
     auto *q = reinterpret_cast<be_u32 *>(static_cast<u8 *>(pData));
     q[0] = bd::gpu::Occlusion::Count();

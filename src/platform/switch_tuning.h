@@ -26,10 +26,13 @@ bool SwitchHandheldRenderSize(u32 &w, u32 &h);
 // on every core of the process, starting on 'core'. A thread made with
 // std::thread on Horizon is otherwise confined to the core it was created on.
 void SpreadCurrentThread(int core);
+// Horizon priority of the calling thread (0x2C..0x3B for an application).
+void SetCurrentThreadPriority(int priority);
 #else
 inline void ApplySwitchClocks() {}
 inline bool SwitchHandheldRenderSize(u32 &, u32 &) { return false; }
 inline void SpreadCurrentThread(int) {}
+inline void SetCurrentThreadPriority(int) {}
 #endif
 
 } // namespace bd::platform

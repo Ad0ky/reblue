@@ -244,4 +244,10 @@ void SpreadCurrentThread(int core) {
             core, mask, rc);
 }
 
+void SetCurrentThreadPriority(int priority) {
+  const Result rc = svcSetThreadPriority(CUR_THREAD_HANDLE, u32(priority));
+  if (R_FAILED(rc))
+    BD_WARN("Switch: svcSetThreadPriority({:#x}) failed: {:#x}", priority, rc);
+}
+
 } // namespace bd::platform
