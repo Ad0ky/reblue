@@ -637,6 +637,23 @@ inline bool SameRegister(const u8 *a, const u8 *b) {
   return ((x[0] ^ y[0]) | (x[1] ^ y[1])) == 0;
 }
 
+#if defined(__aarch64__) || defined(_M_ARM64)
+// The lowered register kept in a vector register: LoadGuestRegister stored it
+// to the stack as 16 bytes and SameRegister read it back as two 8-byte loads,
+// which the Cortex-A57 cannot forward from the store (the stall was the
+// hottest instruction of PushDeltaConstants on the console).
+inline uint8x16_t LoadGuestRegisterVec(const u8 *guest) {
+  uint32x4_t v = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(guest)));
+  v = vbicq_u32(v, vcgtq_u32(vandq_u32(v, vdupq_n_u32(0x7FFFFFFFu)),
+                             vdupq_n_u32(0x7F800000u)));
+  return vreinterpretq_u8_u32(v);
+}
+inline bool SameRegisterVec(uint8x16_t a, const u8 *b) {
+  const uint64x2_t x = vreinterpretq_u64_u8(veorq_u8(a, vld1q_u8(b)));
+  return (vgetq_lane_u64(x, 0) | vgetq_lane_u64(x, 1)) == 0;
+}
+#endif
+
 // Registers the engine writes straight into the device copy, not through the
 // D3D setters (state.cpp, tweaks.cpp): checked on every draw, since some of
 // those writers run between draws inside one hooked function.
@@ -820,6 +837,16 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
     const bool marked = entries[i].marked;
     if (runEnd && r > runEnd + 2)
       flush();
+#if defined(__aarch64__) || defined(_M_ARM64)
+    uint8x16_t v = LoadGuestRegisterVec(values[i]);
+    if (pinUv && r == 50) {
+      const uint64x2_t halves = vsetq_lane_u64(
+          0x3F0000003F000000ull, vreinterpretq_u64_u8(v), 0); // x = y = 0.5f
+      v = vreinterpretq_u8_u64(halves);
+    }
+    if (r < known && SameRegisterVec(v, shadow + r * 16))
+      continue;
+#else
     alignas(16) u8 v[16];
     LoadGuestRegister(v, values[i]);
     if (pinUv && r == 50) {
@@ -829,6 +856,7 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
     }
     if (r < known && SameRegister(v, shadow + r * 16))
       continue;
+#endif
     if (!marked) {
       g_delta_misses.fetch_add(1, std::memory_order_relaxed);
       const u64 bit = 1ull << (r % 64);
@@ -846,7 +874,11 @@ bool PushDeltaConstants(plume::RenderCommandList *list, ConstantBank bank,
                      static_cast<unsigned long long>(h));
       }
     }
+#if defined(__aarch64__) || defined(_M_ARM64)
+    vst1q_u8(shadow + r * 16, v);
+#else
     std::memcpy(shadow + r * 16, v, 16);
+#endif
     if (runEnd && r <= runEnd + 2) {
       runEnd = r + 1;
     } else {
