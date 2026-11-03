@@ -265,7 +265,9 @@ stderr log says which). `bd_native_sincos = false` turns it off.
 (`sub_8272EB40`, a linear scan over a curve's keys, ~13% of the Main Thread):
 its first 50000 calls also run the recompiled function and compare every
 register and word it leaves; it stays off on any difference
-(`bd_native_anim_curve`).
+(`bd_native_anim_curve`). The interpolation between the two keys
+(`sub_8272EC00`, a cubic Hermite segment) is native the same way, checked
+the same way (`bd_native_anim_interp`).
 
 The localized copies (`tools/switch/localize.py`) store `stvlx`/`stvrx` with
 one call each instead of the recompiled byte loop (a store and a bound check

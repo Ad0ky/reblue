@@ -74,7 +74,7 @@ sub_8227CB10
 # the Main Thread and the Draw Thread not yet copied (each under 0.5%).
 sub_8227A568
 sub_824911F8
-sub_8272EC00
+sub_8272EC00 hooked
 bdSoundFindCueByName
 sub_8213BEE8
 sub_8227C640
