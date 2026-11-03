@@ -33,9 +33,14 @@ REXCVAR_DEFINE_BOOL(audio_switch_bomba, true, "Audio",
                     "MarathonRecomp-NX) en vez de 4 seguidas al consumir cada bufer de audout, que "
                     "dejaban sin paquete a la voz del servidor de audio del juego (audio robotico); "
                     "se lee al abrir el audio");
-REXCVAR_DEFINE_INT32(audio_switch_tramas_en_cola, 10, "Audio",
+// re:Blue (2026-11-03): 16 (85 ms) instead of 10 (53 ms). With 10, Blue Dragon's
+// sound thread, held up behind the draw and main threads in the heaviest
+// scenes, still left the output without data now and then (crackling): 21-31
+// empty requests in 6 minutes of a busy route, with the thread already above
+// the guest priority.
+REXCVAR_DEFINE_INT32(audio_switch_tramas_en_cola, 16, "Audio",
                      "Con audio_switch_bomba: tramas del juego que se mantienen en cola antes de audout "
-                     "(colchon; 10 = 53 ms, 6 hasta la build 105). Mas cola deja esperar al juego sin cortar la "
+                     "(colchon; 16 = 85 ms; 10 hasta re:Blue 2026-11-03, 6 hasta la build 105). Mas cola deja esperar al juego sin cortar la "
                      "salida, a cambio de latencia: nfsmw_audio_esperar_servidor_ms espera hasta 30 ms; se lee "
                      "al abrir el audio");
 
