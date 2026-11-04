@@ -279,7 +279,9 @@ this the PGO profile should be recorded again: copies made after it have no
 counts. `bd_cpu_natives_off` runs chosen copies as the
 recompiled originals without a new build: function names, a batch (`fifth`)
 or positions in one (`fifth:0-374`), comma-separated; halving the range finds
-a copy that misbehaves in a few launches.
+a copy that misbehaves in a few launches. `bd_cpu_natives_trace = true`
+writes each copy's first call to stderr (`[hot] first call: name
+batch:position`): after a crash, only the copies listed can be the cause.
 
 The localized copies (`tools/switch/localize.py`) store `stvlx`/`stvrx` with
 one call each instead of the recompiled byte loop (a store and a bound check

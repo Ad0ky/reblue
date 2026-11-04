@@ -34,6 +34,10 @@ REXCVAR_DEFINE_STRING(bd_cpu_natives_off, "", "Switch",
                       "comma-separated function names, batches (first ... "
                       "fifth, as in localized.txt) or batch:first-last "
                       "positions (fifth:0-199). Read at start.");
+REXCVAR_DEFINE_BOOL(bd_cpu_natives_trace, false, "Switch",
+                    "Write each localized copy's first call to the log "
+                    "(name, batch:position), to find which copies ran before "
+                    "a crash. Read at start.");
 
 namespace {
 
@@ -96,7 +100,7 @@ const std::vector<OffRule> &OffRules() {
   return rules;
 }
 
-bool NativeOn(const char *name, const char *batch, int index) {
+bool NativeDecide(const char *name, const char *batch, int index) {
   if (!NativesOn())
     return false;
   for (const OffRule &r : OffRules()) {
@@ -107,6 +111,18 @@ bool NativeOn(const char *name, const char *batch, int index) {
       return false;
   }
   return true;
+}
+
+// Called once per copy, on its first call.
+bool NativeOn(const char *name, const char *batch, int index) {
+  const bool on = NativeDecide(name, batch, index);
+  static const bool trace = REXCVAR_GET(bd_cpu_natives_trace);
+  if (trace) {
+    std::fprintf(stderr, "[hot] first call: %s %s:%d%s\n", name, batch, index,
+                 on ? "" : " (off)");
+    std::fflush(stderr);
+  }
+  return on;
 }
 
 } // namespace
