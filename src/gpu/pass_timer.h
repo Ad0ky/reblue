@@ -15,6 +15,11 @@
  * 10 s the log gets a [gpu-shaders] block: the pixel shaders that cost the most
  * GPU time per frame, by shader cache hash (the name of the shader in the HLSL
  * dump), with their draws per frame, main vertex shader and render target.
+ * On deko3d each stamp also records the pixel and vertex shader invocation
+ * counters, so every row gets the pixels and vertices it shaded per frame and
+ * its GPU time per draw and per thousand pixels: a shader whose time follows
+ * its pixels is worth making cheaper per pixel, one whose time follows its
+ * draws costs in the per-draw work around it.
  * Timestamps wait for the work before them, so the numbers rank shaders rather
  * than add up to the frame exactly. Off the Switch every call is a no-op.
  */

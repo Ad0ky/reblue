@@ -2016,10 +2016,10 @@ index 0000000..5feb942
 +};
 diff --git a/plume_deko3d.h b/plume_deko3d.h
 new file mode 100644
-index 0000000..d314610
+index 0000000..c18068c
 --- /dev/null
 +++ b/plume_deko3d.h
-@@ -0,0 +1,708 @@
+@@ -0,0 +1,715 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): plume's render interface on deko3d, the Switch's own GPU API, for
 +// Renut's renderer (docs/deko3d-renderer.md). MIT, as plume. deko3d is zlib (fincs, devkitPro); the shaders are compiled
@@ -2664,6 +2664,13 @@ index 0000000..d314610
 +    bool Deko3DSetBlendConstant(RenderCommandList *commandList, const float rgba[4]);
 +    // banjo-nx: the memexport buffer of the next draws (storage binding 14 of the graphics stages).
 +    bool Deko3DBindMemExport(RenderCommandList *commandList, const RenderBuffer *buffer);
++    // The pipeline counters at this point of the command list (after the work
++    // before it): pixel shader invocations into query 2*index, vertex shader
++    // invocations into 2*index+1 of a pool made by createQueryPool. reblue's
++    // pass timer, to tell pixel cost from per-draw cost (2026-11-04).
++    void Deko3DReportShaderCounters(RenderCommandList *commandList, const RenderQueryPool *queryPool, uint32_t index);
++    // The raw counter values of the first 'count' queries (not timestamps).
++    void Deko3DQueryCounterValues(const RenderQueryPool *queryPool, uint32_t count, uint64_t *out);
 +    // banjo-nx: the vertex fetch data of the next draws (storage binding 15 of the graphics stages): size bytes from
 +    // address, which the shaders index from 0 (shader_common.h, g_DkAddressWindow).
 +    bool Deko3DBindFetchData(RenderCommandList *commandList, uint64_t address, uint32_t size);
@@ -2730,10 +2737,10 @@ index 0000000..d314610
 +};
 diff --git a/plume_deko3d_commands.cpp b/plume_deko3d_commands.cpp
 new file mode 100644
-index 0000000..5c1318a
+index 0000000..8cb5682
 --- /dev/null
 +++ b/plume_deko3d_commands.cpp
-@@ -0,0 +1,1378 @@
+@@ -0,0 +1,1402 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): command lists, the queue and the swapchain (plume_deko3d.cpp has the
 +// device). docs/deko3d-renderer.md section 4 maps each plume call to deko3d.
@@ -3788,6 +3795,30 @@ index 0000000..5c1318a
 +            return;
 +        memcpy(blendConstant, rgba, sizeof(blendConstant));
 +        dkCmdBufSetBlendConst(cmd, rgba[0], rgba[1], rgba[2], rgba[3]);
++    }
++
++    void Deko3DReportShaderCounters(RenderCommandList *commandList, const RenderQueryPool *queryPool, uint32_t index) {
++        Deko3DCommandList *cl = static_cast<Deko3DCommandList *>(commandList);
++        const Deko3DQueryPool *pool = static_cast<const Deko3DQueryPool *>(queryPool);
++        if (!cl || !pool || !pool->block || 2 * index + 1 >= pool->results.size())
++            return;
++        cl->flushBarriers();
++        const DkGpuAddr base = dkMemBlockGetGpuAddr(pool->block) + uint64_t(index) * 32;
++        dkCmdBufReportCounter(cl->cmd, DkCounter_FragmentShaderInvocations, base);
++        dkCmdBufReportCounter(cl->cmd, DkCounter_VertexShaderInvocations, base + 16);
++    }
++
++    void Deko3DQueryCounterValues(const RenderQueryPool *queryPool, uint32_t count, uint64_t *out) {
++        const Deko3DQueryPool *pool = static_cast<const Deko3DQueryPool *>(queryPool);
++        count = std::min<uint32_t>(count, pool ? uint32_t(pool->results.size()) : 0u);
++        if (!pool || !pool->block) {
++            for (uint32_t i = 0; i < count; i++)
++                out[i] = 0;
++            return;
++        }
++        const volatile uint64_t *reports = static_cast<const volatile uint64_t *>(dkMemBlockGetCpuAddr(pool->block));
++        for (uint32_t i = 0; i < count; i++)
++            out[i] = reports[i * 2];
 +    }
 +
 +    bool Deko3DBindMemExport(RenderCommandList *commandList, const RenderBuffer *buffer) {

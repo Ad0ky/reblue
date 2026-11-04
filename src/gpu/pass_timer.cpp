@@ -16,6 +16,9 @@
 #include <vector>
 
 #include <plume_render_interface.h>
+#if defined(PLUME_DEKO3D)
+#include <plume_deko3d.h>
+#endif
 
 #include "core/logging.h"
 #include "gpu/device.h"
@@ -66,6 +69,10 @@ struct Segment {
 
 struct ShaderSlot {
   std::unique_ptr<plume::RenderQueryPool> pool;
+  // Beside each stamp: the pixel and vertex shader invocation counters
+  // (queries 2i, 2i+1), so a segment's GPU time comes with the pixels and
+  // vertices it shaded.
+  std::unique_ptr<plume::RenderQueryPool> counters;
   u32 used = 0;
   bool open = false;
   bool ready = false;
@@ -75,6 +82,8 @@ struct ShaderSlot {
 struct ShaderTotals {
   double ns = 0;
   u64 draws = 0;
+  u64 pixels = 0;   // pixel shader invocations
+  u64 vertices = 0; // vertex shader invocations
   std::unordered_map<u64, u64> vsDraws;
   std::unordered_map<u32, double> targetNs;
 };
@@ -122,6 +131,10 @@ void ShaderStamp(plume::RenderCommandList *list, ShaderSlot &slot,
     return;
   }
   list->writeTimestamp(slot.pool.get(), slot.used);
+#if defined(PLUME_DEKO3D)
+  if (slot.counters)
+    plume::Deko3DReportShaderCounters(list, slot.counters.get(), slot.used);
+#endif
   slot.segments.resize(slot.used + 1);
   slot.segments[slot.used] = segment;
   ++slot.used;
@@ -163,11 +176,18 @@ void ReportShaders(double window_s) {
         targetMost = ns;
         target = index;
       }
+    // Pixels and vertices shaded per frame, and the GPU time per draw and
+    // per thousand pixels: pixel-bound shaders cost per pixel, the rest per
+    // draw or per vertex.
     BD_INFO("[gpu-shaders]   {:5.2f} ms/frame {:4.1f}%  {:6.1f} draws/frame  "
+            "{:7.1f} Kpx {:6.1f} Kvtx /frame  {:5.1f} us/draw {:5.2f} us/Kpx  "
             "ps {:016x}  vs {:016x}{}  in {}",
             t.ns / frames / 1e6,
             g_shaderFrameNs > 0 ? 100.0 * t.ns / g_shaderFrameNs : 0.0,
-            double(t.draws) / frames, hash, vs,
+            double(t.draws) / frames, double(t.pixels) / frames / 1e3,
+            double(t.vertices) / frames / 1e3,
+            t.draws ? t.ns / double(t.draws) / 1e3 : 0.0,
+            t.pixels ? t.ns / (double(t.pixels) / 1e3) / 1e3 : 0.0, hash, vs,
             t.vsDraws.size() > 1
                 ? " (+" + std::to_string(t.vsDraws.size() - 1) + " more)"
                 : std::string(),
@@ -193,6 +213,15 @@ void CollectShaders(u32 slot_index) {
   const u32 last = slot.used;
   if (ts[last] <= ts[0])
     return;
+  std::vector<u64> c(2 * (last + 1), 0);
+#if defined(PLUME_DEKO3D)
+  if (slot.counters)
+    plume::Deko3DQueryCounterValues(slot.counters.get(), 2 * (last + 1), c.data());
+#endif
+  auto delta = [&](u32 i, u32 k) {
+    const u64 a = c[2 * i + k], b = c[2 * (i + 1) + k];
+    return b >= a ? b - a : 0;
+  };
   for (u32 i = 0; i < last; ++i) {
     if (ts[i + 1] < ts[i])
       continue;
@@ -205,6 +234,8 @@ void CollectShaders(u32 slot_index) {
     ShaderTotals &t = g_shaderTotals[seg.ps];
     t.ns += ns;
     t.draws += seg.draws;
+    t.pixels += delta(i, 0);
+    t.vertices += delta(i, 1);
     t.vsDraws[seg.vs] += seg.draws;
     t.targetNs[seg.target] += ns;
     g_shaderDraws += seg.draws;
@@ -350,6 +381,10 @@ void BeginFrame(plume::RenderDevice *device, plume::RenderCommandList *list,
       g_shaderFailed = true;
       return;
     }
+#if defined(PLUME_DEKO3D)
+    if (UsingDeko3D()) // counters only on deko3d
+      shaders.counters = device->createQueryPool(2 * kMaxShaderStamps);
+#endif
   }
   shaders.used = 0;
   shaders.segments.clear();
@@ -436,6 +471,11 @@ void EndFrame(plume::RenderCommandList *list, u32 slot_index) {
   if (shaders.open) {
     for (u32 i = shaders.used; i < kMaxShaderStamps; ++i)
       list->writeTimestamp(shaders.pool.get(), i);
+#if defined(PLUME_DEKO3D)
+    if (shaders.counters)
+      plume::Deko3DReportShaderCounters(list, shaders.counters.get(),
+                                        shaders.used);
+#endif
     shaders.open = false;
     shaders.ready = true;
   }
