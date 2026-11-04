@@ -16,7 +16,10 @@
 #include "reblue_pch.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include <rex/cvar.h>
 
@@ -26,6 +29,11 @@ REXCVAR_DEFINE_BOOL(bd_cpu_natives, true, "Switch",
                     "Run the localized copies of the hottest game functions "
                     "(src/platform/switch/hot/localized.txt) instead of the "
                     "recompiled originals. Read at start.");
+REXCVAR_DEFINE_STRING(bd_cpu_natives_off, "", "Switch",
+                      "Localized copies to run as the recompiled originals: "
+                      "comma-separated function names, batches (first ... "
+                      "fifth, as in localized.txt) or batch:first-last "
+                      "positions (fifth:0-199). Read at start.");
 
 namespace {
 
@@ -37,6 +45,68 @@ bool NativesOn() {
     return v;
   }();
   return on;
+}
+
+// bd_cpu_natives_off: copies run as the recompiled originals instead, by
+// name, by batch ("fifth") or by position in a batch ("fifth:0-199"), so a
+// copy that misbehaves can be found by halving without a new build.
+struct OffRule {
+  std::string name;  // a function, or a batch with first..last
+  std::string batch;
+  int first = 0, last = -1;
+};
+
+const std::vector<OffRule> &OffRules() {
+  static const std::vector<OffRule> rules = [] {
+    std::vector<OffRule> out;
+    const std::string spec = REXCVAR_GET(bd_cpu_natives_off);
+    size_t at = 0;
+    while (at <= spec.size()) {
+      size_t end = spec.find(',', at);
+      if (end == std::string::npos)
+        end = spec.size();
+      std::string tok = spec.substr(at, end - at);
+      while (!tok.empty() && tok.front() == ' ')
+        tok.erase(tok.begin());
+      while (!tok.empty() && tok.back() == ' ')
+        tok.pop_back();
+      if (!tok.empty()) {
+        OffRule r;
+        const size_t colon = tok.find(':');
+        if (colon != std::string::npos) {
+          r.batch = tok.substr(0, colon);
+          const std::string range = tok.substr(colon + 1);
+          const size_t dash = range.find('-');
+          r.first = std::atoi(range.substr(0, dash).c_str());
+          r.last = dash == std::string::npos
+                       ? r.first
+                       : std::atoi(range.substr(dash + 1).c_str());
+        } else {
+          r.name = tok; // a function or a whole batch
+        }
+        out.push_back(r);
+      }
+      at = end + 1;
+    }
+    if (!out.empty())
+      std::fprintf(stderr, "[hot] bd_cpu_natives_off = \"%s\"\n",
+                   spec.c_str());
+    return out;
+  }();
+  return rules;
+}
+
+bool NativeOn(const char *name, const char *batch, int index) {
+  if (!NativesOn())
+    return false;
+  for (const OffRule &r : OffRules()) {
+    if (!r.name.empty() && (r.name == name || r.name == batch))
+      return false;
+    if (!r.batch.empty() && r.batch == batch && index >= r.first &&
+        index <= r.last)
+      return false;
+  }
+  return true;
 }
 
 } // namespace
@@ -87,9 +157,10 @@ static inline void reblue_stvrx(u8 *base, u32 ea, const u8 *v) {
 #define REBLUE_FP_FENCE() __asm__ __volatile__("" ::: "memory")
 
 // A function no hook replaces: this is its hook.
-#define REBLUE_HOT_HOOK(name)                                                  \
+#define REBLUE_HOT_HOOK(name, batch, index)                                    \
   extern "C" REX_FUNC(name) {                                                  \
-    if (NativesOn()) [[likely]]                                                \
+    static const bool on = NativeOn(#name, batch, index);                      \
+    if (on) [[likely]]                                                         \
       n_##name(ctx, base);                                                     \
     else                                                                       \
       __imp__##name(ctx, base);                                                \
