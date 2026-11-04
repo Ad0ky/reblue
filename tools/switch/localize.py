@@ -126,8 +126,17 @@ def merge_partial_stores(body):
     return out
 
 
-def localize(name, body):
-    body = merge_partial_stores(body)
+VOLATILE_ACCESS = re.compile(r'\bREX_(LOAD|STORE)_(U8|U16|U32|U64)\(')
+
+
+def localize(name, body, volatile=False):
+    # volatile: guest memory keeps the recompiled code's volatile accesses
+    # (REBLUE_VLOAD/VSTORE in hot_natives.cpp); only the registers become
+    # locals. The stvlx/stvrx byte loops stay as they are.
+    if volatile:
+        body = [VOLATILE_ACCESS.sub(lambda m: f'REBLUE_V{m.group(1)}_{m.group(2)}(', l) for l in body]
+    else:
+        body = merge_partial_stores(body)
     text = '\n'.join(body)
     for bad, why in (('reserved', 'a reservation (lwarx/stwcx.)'), ('setjmp', 'setjmp'),
                      ('longjmp', 'longjmp'), ('ctx.lr', 'the link register')):
@@ -410,11 +419,14 @@ def main():
     # A comment like "# Fifth batch ..." starts a batch: its functions can be
     # turned off together at run time (bd_cpu_natives_off = fifth, or
     # fifth:0-99 by position), to find a copy that misbehaves without a build.
-    batch, batch_of = 'first', {}
+    # "volatile" on the batch's first line keeps its guest accesses volatile.
+    batch, batch_of, volatile_batches = 'first', {}, set()
     for raw in open(listing, encoding='utf-8'):
         m = re.match(r'^#\s*(\w+) batch\b', raw, re.I)
         if m:
             batch = m.group(1).lower()
+            if re.search(r'\bvolatile\b', raw, re.I):
+                volatile_batches.add(batch)
         line = raw.split('#', 1)[0].split()
         if line:
             wanted.append((line[0], len(line) > 1 and line[1] == 'hooked'))
@@ -430,7 +442,8 @@ def main():
                 decls.add('__imp__' + name)
                 hooks.append(f'REBLUE_HOT_CALLER_ORIGINAL({name})')
             continue
-        result, why = localize(name, bodies[name])
+        result, why = localize(name, bodies[name],
+                               batch_of.get(name, 'first') in volatile_batches)
         if result is None:
             report.append(f'{name}: left to the recompiled code ({why})')
             if hooked:  # its hook still calls bd::hot::Call_NAME

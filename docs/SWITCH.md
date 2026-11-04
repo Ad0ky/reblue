@@ -283,6 +283,14 @@ a copy that misbehaves in a few launches. `bd_cpu_natives_trace = true`
 writes each copy's first call to stderr (`[hot] first call: name
 batch:position`): after a crash, only the copies listed can be the cause.
 
+The fifth batch keeps the recompiled code's volatile guest accesses (its
+batch line in `localized.txt` says `volatile`): with plain accesses it
+corrupted data on the console (shaders at startup, the title menu, loading a
+save), with volatile ones it runs the whole test route. Its copies still keep
+the registers in locals. The first four batches, which ran for weeks with
+plain accesses, keep them. `REBLUE_HOT_VOLATILE=1` makes every copy volatile
+(a diagnostic build).
+
 The localized copies (`tools/switch/localize.py`) store `stvlx`/`stvrx` with
 one call each instead of the recompiled byte loop (a store and a bound check
 per byte): 248 of them in the hot functions, 80 in

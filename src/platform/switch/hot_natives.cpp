@@ -27,7 +27,7 @@
 
 // See the guest memory macros below.
 #ifndef REBLUE_HOT_VOLATILE
-#define REBLUE_HOT_VOLATILE 1
+#define REBLUE_HOT_VOLATILE 0
 #endif
 
 REXCVAR_DEFINE_BOOL(bd_cpu_natives, true, "Switch",
@@ -138,9 +138,25 @@ bool NativeOn(const char *name, const char *batch, int index) {
 // compiler barrier heads every loop, so memory another thread writes is read
 // again on each iteration. Compiled with -fno-strict-aliasing (CMake), since a
 // guest address may be read with another width than it was written with.
-// REBLUE_HOT_VOLATILE 1: the copies keep the recompiled code's volatile
-// guest accesses (registers stay localized). A diagnostic build: it tells a
-// fault of the localized registers from one of the non-volatile accesses.
+// REBLUE_HOT_VOLATILE 1: every copy keeps the recompiled code's volatile
+// guest accesses (registers stay localized), a diagnostic build.
+//
+// The batches marked volatile in localized.txt always do, through these:
+// with plain accesses the fifth batch corrupted data at startup (the shaders
+// arrived corrupted, the title menu was wrong, a save would not load), and
+// with volatile ones it ran the whole test route (2026-11-04), while its zlib
+// copy matches the original on a real deflate stream in a host test.
+#define REBLUE_VLOAD_U8(x) (*(volatile u8 *)(base + (u32)(x)))
+#define REBLUE_VLOAD_U16(x) __builtin_bswap16(*(volatile u16 *)(base + (u32)(x)))
+#define REBLUE_VLOAD_U32(x) __builtin_bswap32(*(volatile u32 *)(base + (u32)(x)))
+#define REBLUE_VLOAD_U64(x) __builtin_bswap64(*(volatile u64 *)(base + (u32)(x)))
+#define REBLUE_VSTORE_U8(x, y) (*(volatile u8 *)(base + (u32)(x)) = (y))
+#define REBLUE_VSTORE_U16(x, y) \
+  (*(volatile u16 *)(base + (u32)(x)) = __builtin_bswap16(y))
+#define REBLUE_VSTORE_U32(x, y) \
+  (*(volatile u32 *)(base + (u32)(x)) = __builtin_bswap32(y))
+#define REBLUE_VSTORE_U64(x, y) \
+  (*(volatile u64 *)(base + (u32)(x)) = __builtin_bswap64(y))
 #if !REBLUE_HOT_VOLATILE
 #undef REX_LOAD_U8
 #undef REX_LOAD_U16

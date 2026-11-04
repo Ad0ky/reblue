@@ -102,11 +102,12 @@ sub_82284BE0
 bdMatrixBuildRotationY
 bdRenderViewInsertObject
 sub_8272EDC8
-# Fifth batch: every other function with samples in the console profiles of
+# Fifth batch (volatile guest memory): every other function with samples in the console profiles of
 # 2026-11-03 (all threads), as katamari-nx does: not the ones a hook or the
 # SDK replaces, not leaves of 12 instructions or fewer. localize_check: each
 # agrees with the recompiled code on 40 random runs; the ones that did not, or
-# that never completed a run, are left out.
+# that never completed a run, are left out. Volatile: with plain guest
+# accesses the batch corrupted data on the console (2026-11-04).
 sub_8272BE80
 sub_821CC540
 sub_82729368

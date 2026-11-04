@@ -155,6 +155,14 @@ PLAIN_MEM = VOLATILE_MEM.replace('volatile ', '')
 
 # The merged stvlx / stvrx of the copies (hot_natives.cpp has the same).
 PARTIAL_STORES = r'''
+#define REBLUE_VLOAD_U8(x) (*(volatile u8*)(base + (u32)(x)))
+#define REBLUE_VLOAD_U16(x) __builtin_bswap16(*(volatile u16*)(base + (u32)(x)))
+#define REBLUE_VLOAD_U32(x) __builtin_bswap32(*(volatile u32*)(base + (u32)(x)))
+#define REBLUE_VLOAD_U64(x) __builtin_bswap64(*(volatile u64*)(base + (u32)(x)))
+#define REBLUE_VSTORE_U8(x, y) (*(volatile u8*)(base + (u32)(x)) = (y))
+#define REBLUE_VSTORE_U16(x, y) (*(volatile u16*)(base + (u32)(x)) = __builtin_bswap16(y))
+#define REBLUE_VSTORE_U32(x, y) (*(volatile u32*)(base + (u32)(x)) = __builtin_bswap32(y))
+#define REBLUE_VSTORE_U64(x, y) (*(volatile u64*)(base + (u32)(x)) = __builtin_bswap64(y))
 #include <cstring>
 // stvlx / stvrx (localize.py merges their byte loops into these): the bytes
 // of the vector from ea up to the end of its 16-byte block, and the bytes
@@ -332,11 +340,17 @@ def main():
     root = os.path.abspath(a.root)
     gen = os.path.join(root, 'generated')
     listing = os.path.join(root, 'src', 'platform', 'switch', 'hot', 'localized.txt')
-    names = []
+    names, volatile = [], set()
+    vol_batch = False
     for raw in open(listing, encoding='utf-8'):
+        m = re.match(r'^#\s*(\w+) batch\b', raw, re.I)
+        if m:
+            vol_batch = bool(re.search(r'\bvolatile\b', raw, re.I))
         line = raw.split('#', 1)[0].split()
         if line:
             names.append(line[0])
+            if vol_batch:
+                volatile.add(line[0])
     if a.only:
         names = [n for n in names if n in a.only]
     bodies = localize.find_bodies(gen, set(names))
@@ -346,7 +360,7 @@ def main():
     for n in names:
         if n not in bodies:
             continue
-        result, why = localize.localize(n, bodies[n])
+        result, why = localize.localize(n, bodies[n], n in volatile)
         if result is None:
             print(f'{n}: not localized ({why})')
             continue
