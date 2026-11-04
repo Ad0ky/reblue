@@ -25,6 +25,11 @@
 
 #include "cpu/hot_calls.h"
 
+// See the guest memory macros below.
+#ifndef REBLUE_HOT_VOLATILE
+#define REBLUE_HOT_VOLATILE 1
+#endif
+
 REXCVAR_DEFINE_BOOL(bd_cpu_natives, true, "Switch",
                     "Run the localized copies of the hottest game functions "
                     "(src/platform/switch/hot/localized.txt) instead of the "
@@ -44,8 +49,9 @@ namespace {
 bool NativesOn() {
   static const bool on = [] {
     const bool v = REXCVAR_GET(bd_cpu_natives);
-    std::fprintf(stderr, "[hot] localized copies: %s (bd_cpu_natives)\n",
-                 v ? "on" : "off");
+    std::fprintf(stderr, "[hot] localized copies: %s (bd_cpu_natives), guest "
+                 "memory %s\n", v ? "on" : "off",
+                 REBLUE_HOT_VOLATILE ? "volatile" : "plain");
     return v;
   }();
   return on;
@@ -132,6 +138,10 @@ bool NativeOn(const char *name, const char *batch, int index) {
 // compiler barrier heads every loop, so memory another thread writes is read
 // again on each iteration. Compiled with -fno-strict-aliasing (CMake), since a
 // guest address may be read with another width than it was written with.
+// REBLUE_HOT_VOLATILE 1: the copies keep the recompiled code's volatile
+// guest accesses (registers stay localized). A diagnostic build: it tells a
+// fault of the localized registers from one of the non-volatile accesses.
+#if !REBLUE_HOT_VOLATILE
 #undef REX_LOAD_U8
 #undef REX_LOAD_U16
 #undef REX_LOAD_U32
@@ -148,6 +158,7 @@ bool NativeOn(const char *name, const char *batch, int index) {
 #define REX_STORE_U16(x, y) (*(u16 *)(base + (u32)(x)) = __builtin_bswap16(y))
 #define REX_STORE_U32(x, y) (*(u32 *)(base + (u32)(x)) = __builtin_bswap32(y))
 #define REX_STORE_U64(x, y) (*(u64 *)(base + (u32)(x)) = __builtin_bswap64(y))
+#endif
 // stvlx / stvrx (localize.py merges their byte loops into these): the bytes
 // of the vector from ea up to the end of its 16-byte block, and the bytes
 // before ea back to the start of its block, in guest (big-endian) order.
