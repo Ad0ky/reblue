@@ -11,13 +11,24 @@
 
 #if defined(PLUME_DEKO3D)
 
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #include <miniz.h>
 
+#include <rex/cvar.h>
+
 #include "core/logging.h"
+
+REXCVAR_DEFINE_STRING(bd_debug_flat_ps, "", "Switch",
+                      "Diagnostic, changes the picture: comma-separated pixel "
+                      "shader hashes (as in the [gpu-shaders] lines) drawn "
+                      "with a flat grey shader instead, to measure how much of "
+                      "their GPU time is the pixel shader. Read at start.");
 
 namespace bd::gpu {
 
@@ -39,9 +50,51 @@ const unsigned char *Pack() {
   return g_pack.get();
 }
 
+// bd_debug_flat_ps: the pixel shaders to replace, and the replacement (a
+// blob as make_dk_shaders.py writes them: "BDK3", stage 4, size, 0, GLSL).
+bool FlatPs(uint64_t hash, const void *&data, size_t &size) {
+  static const std::vector<uint64_t> hashes = [] {
+    std::vector<uint64_t> out;
+    const std::string spec = REXCVAR_GET(bd_debug_flat_ps);
+    size_t at = 0;
+    while (at < spec.size()) {
+      size_t end = spec.find(',', at);
+      if (end == std::string::npos)
+        end = spec.size();
+      const std::string item = spec.substr(at, end - at);
+      if (!item.empty())
+        out.push_back(std::strtoull(item.c_str(), nullptr, 16));
+      at = end + 1;
+    }
+    return out;
+  }();
+  bool listed = false;
+  for (uint64_t h : hashes)
+    listed |= h == hash;
+  if (!listed)
+    return false;
+  static const std::vector<unsigned char> blob = [] {
+    static const char glsl[] = "#version 460\n"
+                               "// banjo-dk ubo=0x0 ssbo=0x0 tex=0\n"
+                               "layout(location = 0) out vec4 out_var_SV_Target0;\n"
+                               "void main() { out_var_SV_Target0 = vec4(0.5, 0.5, 0.5, 1.0); }\n";
+    const uint32_t head[4] = {0x334B4442u, 4u, uint32_t(sizeof(glsl) - 1), 0u};
+    std::vector<unsigned char> b(sizeof(head) + sizeof(glsl) - 1);
+    std::memcpy(b.data(), head, sizeof(head));
+    std::memcpy(b.data() + sizeof(head), glsl, sizeof(glsl) - 1);
+    return b;
+  }();
+  BD_WARN("deko3d: pixel shader {:016x} drawn flat grey (bd_debug_flat_ps)", hash);
+  data = blob.data();
+  size = blob.size();
+  return true;
+}
+
 } // namespace
 
 bool Deko3DGameShaderBlob(uint64_t hash, const void *&data, size_t &size) {
+  if (FlatPs(hash, data, size))
+    return true;
   const unsigned char *pack = Pack();
   if (!pack)
     return false;
