@@ -132,6 +132,38 @@ def compile_one(job):
         return key, stage, glsl
 
 
+IN_DECL = re.compile(r'^layout\(location = (\d+)\) in \w+ (\w+);$', re.M)
+OUT_DECL = re.compile(r'^layout\(location = (\d+)\) out \w+ (\w+);\n', re.M)
+
+
+def read_locations(glsl):
+    """Input locations a fragment shader reads (declared and used beyond the declaration)."""
+    return {int(loc) for loc, name in IN_DECL.findall(glsl) if len(re.findall(r'\b' + name + r'\b', glsl)) > 1}
+
+
+def strip_dead_outputs(glsl, read):
+    """A vertex shader without the outputs no fragment shader of the pack reads.
+
+    XenosRecomp's vertex shaders write all 18 interpolants (16 texcoords, 2 colours), most of them 0, while
+    the pixel shaders read texcoords 0..7 at most: every unread output still costs the vertex shader a store
+    and the GPU room per vertex. An output goes only when its every use is a whole statement assigning it
+    (nothing reads it back); the locations of the others stay as they are, so the picture is the same.
+    Returns (glsl, number removed)."""
+    removed = 0
+    for loc, name in OUT_DECL.findall(glsl):
+        if int(loc) in read:
+            continue
+        assign = re.compile(r'^[ \t]*' + name + r'(\.[xyzw]+)? = [^;\n]*;\n', re.M)
+        decl = f'layout(location = {loc}) out '
+        body = assign.sub('', glsl)
+        rest = [l for l in body.split('\n') if re.search(r'\b' + name + r'\b', l) and not l.startswith(decl)]
+        if rest:
+            continue
+        glsl = re.sub(r'^layout\(location = ' + loc + r'\) out \w+ ' + name + r';\n', '', body, flags=re.M)
+        removed += 1
+    return glsl, removed
+
+
 def blob(stage, glsl):
     data = glsl.encode()
     return struct.pack('<4I', 0x334B4442, DK_STAGE[stage], len(data), 0) + data
@@ -181,6 +213,19 @@ def main():
         print(f'deko3d shader {key}: {err}', file=sys.stderr)
     if failures:
         sys.exit(f'{len(failures)} of {len(jobs)} shaders failed')
+
+    # Vertex outputs no fragment shader reads (game and host shaders alike).
+    read = set()
+    for stage, glsl in results.values():
+        if stage == 'frag':
+            read |= read_locations(glsl)
+    stripped = 0
+    for key, (stage, glsl) in list(results.items()):
+        if stage == 'vert':
+            glsl, n = strip_dead_outputs(glsl, read)
+            stripped += n
+            results[key] = (stage, glsl)
+    print(f'deko3d: fragment shaders read locations {sorted(read)}; {stripped} unread vertex outputs removed')
 
     raw = bytearray()
     game, host = [], []

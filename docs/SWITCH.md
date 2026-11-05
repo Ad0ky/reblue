@@ -283,6 +283,15 @@ a copy that misbehaves in a few launches. `bd_cpu_natives_trace = true`
 writes each copy's first call to stderr (`[hot] first call: name
 batch:position`): after a crash, only the copies listed can be the cause.
 
+GPU, 2026-11-05/06: in the slowest field scenes (15-18 fps, GPU 55-64 ms a
+frame) `bd_toon_ps` took ~25 ms over ~2000 draws of ~40 pixels and ~290
+vertices each (the pass timer's pixel and vertex counters); drawn flat grey
+(`bd_debug_flat_ps`) it still took 9.5 of its 14.5 us per draw, so two thirds
+are vertex and triangle work. `make_dk_shaders.py` now drops the vertex
+outputs no fragment shader reads (XenosRecomp writes all 18 interpolants, the
+pixel shaders read texcoords 0..7 at most): 10 of the toon vertex shader's
+18, 560 over the 56 vertex shaders. Same picture.
+
 The fifth batch keeps the recompiled code's volatile guest accesses (its
 batch line in `localized.txt` says `volatile`): with plain accesses it
 corrupted data on the console (shaders at startup, the title menu, loading a
