@@ -242,6 +242,51 @@ void CollectVisibility(u32 slot_index) {
   ++g_visFrames;
 }
 
+// ---- bool constant words per shader (the timed frames) ----
+//
+// The game's big shaders branch on bool constants (BOOL_BIT), and compiled
+// for one fixed word they shrink a lot (bd_normal_ps: 65 registers and 1760
+// instruction slots as it is, 5 to 25 registers for fixed words). Which words
+// each shader runs with decides whether precompiled fixed-word variants pay.
+struct BoolTotals {
+  u64 draws = 0;
+  std::unordered_map<u32, u64> words;
+};
+std::unordered_map<u64, BoolTotals> g_psBools, g_vsBools;
+
+void ReportBoolsOf(const char *stage, std::unordered_map<u64, BoolTotals> &m,
+                   u32 frames) {
+  std::vector<std::pair<u64, BoolTotals *>> rows;
+  for (auto &[h, t] : m)
+    rows.emplace_back(h, &t);
+  std::sort(rows.begin(), rows.end(), [](const auto &a, const auto &b) {
+    return a.second->draws > b.second->draws;
+  });
+  size_t shown = 0;
+  for (auto &[h, t] : rows) {
+    if (shown++ == 8)
+      break;
+    std::vector<std::pair<u32, u64>> w(t->words.begin(), t->words.end());
+    std::sort(w.begin(), w.end(),
+              [](const auto &a, const auto &b) { return a.second > b.second; });
+    std::string list;
+    for (size_t i = 0; i < w.size() && i < 8; ++i)
+      list += fmt::format(" {:08x} {:.0f}%", w[i].first,
+                          100.0 * double(w[i].second) / double(t->draws));
+    BD_INFO("[gpu-bools]   {} {:016x}: {:6.1f} draws/frame, {} words:{}", stage,
+            h, double(t->draws) / frames, w.size(), list);
+  }
+}
+
+void ReportBools(u32 frames) {
+  if (frames && !g_psBools.empty()) {
+    ReportBoolsOf("ps", g_psBools, frames);
+    ReportBoolsOf("vs", g_vsBools, frames);
+  }
+  g_psBools.clear();
+  g_vsBools.clear();
+}
+
 void ReportShaders(double window_s) {
   if (!g_shaderFrames)
     return;
@@ -534,7 +579,8 @@ void MarkTargets(plume::RenderCommandList *list, u32 slot_index,
 }
 
 void MarkDraw(plume::RenderCommandList *list, u32 slot_index,
-              const GuestShader *vs, const GuestShader *ps) {
+              const GuestShader *vs, const GuestShader *ps, u32 vs_bool,
+              u32 ps_bool) {
   if (slot_index >= kNumFrames)
     return;
 #if defined(PLUME_DEKO3D)
@@ -549,6 +595,14 @@ void MarkDraw(plume::RenderCommandList *list, u32 slot_index,
   if (!slot.open || !list)
     return;
   const u64 psHash = ShaderHash(ps);
+  {
+    BoolTotals &p = g_psBools[psHash];
+    ++p.draws;
+    ++p.words[ps_bool];
+    BoolTotals &v = g_vsBools[ShaderHash(vs)];
+    ++v.draws;
+    ++v.words[vs_bool];
+  }
   const u64 vsHash = ShaderHash(vs);
   if (!slot.segments.empty()) {
     Segment &cur = slot.segments.back();
@@ -658,6 +712,7 @@ void Collect(u32 slot_index) {
       std::chrono::duration<double>(now - g_window_start).count();
   if (window_s >= 10.0) {
     Report(window_s);
+    ReportBools(u32(g_shaderFrames));
     ReportShaders(window_s);
     ReportVisibility(window_s);
     g_window_start = now;

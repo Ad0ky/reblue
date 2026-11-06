@@ -46,8 +46,10 @@ void MarkTargets(plume::RenderCommandList *list, u32 slot,
                  const GuestTexture *rt, const GuestTexture *ds);
 void MarkPresent(plume::RenderCommandList *list, u32 slot);
 // Right before a draw is recorded, with the shaders it draws with.
+// vs_bool/ps_bool: the first bool constant word of each stage (BOOL_BIT 0..31
+// and 128..159), counted per shader on the timed frames ([gpu-bools]).
 void MarkDraw(plume::RenderCommandList *list, u32 slot, const GuestShader *vs,
-              const GuestShader *ps);
+              const GuestShader *ps, u32 vs_bool, u32 ps_bool);
 void EndFrame(plume::RenderCommandList *list, u32 slot);
 // After the slot's fence has signalled.
 void Collect(u32 slot);
@@ -57,7 +59,7 @@ inline void MarkTargets(plume::RenderCommandList *, u32, const GuestTexture *,
                         const GuestTexture *) {}
 inline void MarkPresent(plume::RenderCommandList *, u32) {}
 inline void MarkDraw(plume::RenderCommandList *, u32, const GuestShader *,
-                     const GuestShader *) {}
+                     const GuestShader *, u32, u32) {}
 inline void EndFrame(plume::RenderCommandList *, u32) {}
 inline void Collect(u32) {}
 #endif

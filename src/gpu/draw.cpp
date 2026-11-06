@@ -419,7 +419,9 @@ bool Video::FlushRenderStateLocked(u32 device_guest,
   // Switch: per-shader GPU timestamps on the timed frames (pass_timer.h).
   pass_timer::MarkDraw(s.command_list, s.frame.load(std::memory_order_relaxed),
                        s.pipelineState.vertexShader,
-                       s.pipelineState.pixelShader);
+                       s.pipelineState.pixelShader,
+                       captured ? captured->vsBool[0] : 0u,
+                       captured ? captured->psBool[0] : 0u);
   return true;
 }
 
