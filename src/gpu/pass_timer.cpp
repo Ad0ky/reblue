@@ -140,6 +140,108 @@ void ShaderStamp(plume::RenderCommandList *list, ShaderSlot &slot,
   ++slot.used;
 }
 
+// ---- visibility (deko3d) ----
+//
+// One frame in kVisFrameEvery: the pixel and vertex shader counters before
+// every draw, so each draw gets the pixels it shaded. Per pixel shader: how
+// many of its draws shaded nothing (hidden behind what was drawn before, or
+// off screen) and the vertices those draws cost, the work a visibility test
+// could skip with the picture unchanged.
+constexpr u32 kVisFrameEvery = 32;
+constexpr u32 kVisFramePhase = 4; // not a shader-timed frame
+constexpr u32 kMaxVisDraws = 8190;
+
+struct VisSlot {
+  std::unique_ptr<plume::RenderQueryPool> counters; // 2 per report
+  std::vector<std::pair<u64, u64>> draws;           // ps, vs per draw
+  bool open = false;
+  bool ready = false;
+};
+VisSlot g_visSlots[kNumFrames];
+bool g_visFailed = false;
+
+struct VisTotals {
+  u64 draws = 0;
+  u64 hidden = 0;    // 0 pixels
+  u64 tiny = 0;      // 1..16 pixels
+  u64 pixels = 0;
+  u64 vertices = 0;
+  u64 hiddenVertices = 0;
+  u64 tinyVertices = 0;
+};
+std::unordered_map<u64, VisTotals> g_visTotals;
+u32 g_visFrames = 0;
+
+void ReportVisibility(double window_s) {
+  if (!g_visFrames)
+    return;
+  std::vector<std::pair<u64, VisTotals *>> rows;
+  u64 draws = 0, hidden = 0, vtx = 0, hiddenVtx = 0;
+  for (auto &[hash, t] : g_visTotals) {
+    rows.emplace_back(hash, &t);
+    draws += t.draws;
+    hidden += t.hidden;
+    vtx += t.vertices;
+    hiddenVtx += t.hiddenVertices;
+  }
+  std::sort(rows.begin(), rows.end(), [](const auto &a, const auto &b) {
+    return a.second->vertices > b.second->vertices;
+  });
+  const double f = double(g_visFrames);
+  BD_INFO("[gpu-hidden] {:.1f} s, {} frames: {:.0f} draws/frame, {:.0f} shaded "
+          "no pixel ({:.1f}%), {:.0f} of {:.0f} Kvtx/frame in those",
+          window_s, g_visFrames, draws / f, hidden / f,
+          draws ? 100.0 * double(hidden) / double(draws) : 0.0,
+          hiddenVtx / f / 1e3, vtx / f / 1e3);
+  size_t shown = 0;
+  for (auto &[hash, t] : rows) {
+    if (shown++ == 8)
+      break;
+    BD_INFO("[gpu-hidden]   ps {:016x}: {:6.1f} draws/frame, hidden {:5.1f}% "
+            "(their vertices {:5.1f}%), 1-16 px {:5.1f}% (vertices {:5.1f}%), "
+            "{:6.1f} Kvtx {:7.1f} Kpx /frame",
+            hash, t->draws / f,
+            t->draws ? 100.0 * double(t->hidden) / double(t->draws) : 0.0,
+            t->vertices ? 100.0 * double(t->hiddenVertices) / double(t->vertices) : 0.0,
+            t->draws ? 100.0 * double(t->tiny) / double(t->draws) : 0.0,
+            t->vertices ? 100.0 * double(t->tinyVertices) / double(t->vertices) : 0.0,
+            t->vertices / f / 1e3, t->pixels / f / 1e3);
+  }
+  g_visTotals.clear();
+  g_visFrames = 0;
+}
+
+void CollectVisibility(u32 slot_index) {
+  VisSlot &slot = g_visSlots[slot_index];
+  if (!slot.ready)
+    return;
+  slot.ready = false;
+  const u32 n = u32(slot.draws.size());
+  if (!n)
+    return;
+  std::vector<u64> c(2 * (n + 1), 0);
+#if defined(PLUME_DEKO3D)
+  plume::Deko3DQueryCounterValues(slot.counters.get(), 2 * (n + 1), c.data());
+#endif
+  for (u32 i = 0; i < n; ++i) {
+    const u64 pa = c[2 * i], pb = c[2 * (i + 1)];
+    const u64 va = c[2 * i + 1], vb = c[2 * (i + 1) + 1];
+    const u64 px = pb >= pa ? pb - pa : 0, vtx = vb >= va ? vb - va : 0;
+    VisTotals &t = g_visTotals[slot.draws[i].first];
+    ++t.draws;
+    t.pixels += px;
+    t.vertices += vtx;
+    if (px == 0) {
+      ++t.hidden;
+      t.hiddenVertices += vtx;
+    } else if (px <= 16) {
+      ++t.tiny;
+      t.tinyVertices += vtx;
+    }
+  }
+  ++g_visFrames;
+}
+
 void ReportShaders(double window_s) {
   if (!g_shaderFrames)
     return;
@@ -369,6 +471,23 @@ void BeginFrame(plume::RenderDevice *device, plume::RenderCommandList *list,
   list->resetQueryPool(slot.pool.get(), 0, kMaxStamps);
   Stamp(list, slot, "start of frame (before the first target)");
 
+  VisSlot &vis = g_visSlots[slot_index];
+  vis.ready = false;
+  vis.open = false;
+#if defined(PLUME_DEKO3D)
+  if (!g_visFailed && UsingDeko3D() &&
+      g_frameCounter % kVisFrameEvery == kVisFramePhase) {
+    if (!vis.counters) {
+      vis.counters = device->createQueryPool(2 * (kMaxVisDraws + 1));
+      g_visFailed = !vis.counters;
+    }
+    if (vis.counters) {
+      vis.draws.clear();
+      vis.open = true;
+    }
+  }
+#endif
+
   // One frame in kShaderFrameEvery: per-shader timestamps too.
   ShaderSlot &shaders = g_shaderSlots[slot_index];
   shaders.ready = false;
@@ -418,6 +537,14 @@ void MarkDraw(plume::RenderCommandList *list, u32 slot_index,
               const GuestShader *vs, const GuestShader *ps) {
   if (slot_index >= kNumFrames)
     return;
+#if defined(PLUME_DEKO3D)
+  VisSlot &vis = g_visSlots[slot_index];
+  if (vis.open && list && vis.draws.size() < kMaxVisDraws) {
+    plume::Deko3DReportShaderCounters(list, vis.counters.get(),
+                                      u32(vis.draws.size()));
+    vis.draws.emplace_back(ShaderHash(ps), ShaderHash(vs));
+  }
+#endif
   ShaderSlot &slot = g_shaderSlots[slot_index];
   if (!slot.open || !list)
     return;
@@ -467,6 +594,16 @@ void EndFrame(plume::RenderCommandList *list, u32 slot_index) {
   slot.open = false;
   slot.ready = true;
 
+#if defined(PLUME_DEKO3D)
+  VisSlot &vis = g_visSlots[slot_index];
+  if (vis.open) {
+    plume::Deko3DReportShaderCounters(list, vis.counters.get(),
+                                      u32(vis.draws.size()));
+    vis.open = false;
+    vis.ready = true;
+  }
+#endif
+
   ShaderSlot &shaders = g_shaderSlots[slot_index];
   if (shaders.open) {
     for (u32 i = shaders.used; i < kMaxShaderStamps; ++i)
@@ -485,6 +622,7 @@ void Collect(u32 slot_index) {
   if (slot_index >= kNumFrames)
     return;
   CollectShaders(slot_index);
+  CollectVisibility(slot_index);
   Slot &slot = g_slots[slot_index];
   if (!slot.ready)
     return;
@@ -521,6 +659,7 @@ void Collect(u32 slot_index) {
   if (window_s >= 10.0) {
     Report(window_s);
     ReportShaders(window_s);
+    ReportVisibility(window_s);
     g_window_start = now;
   }
 }
