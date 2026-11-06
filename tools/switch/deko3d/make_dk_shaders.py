@@ -153,7 +153,7 @@ def strip_dead_outputs(glsl, read):
     """A vertex shader without the outputs no fragment shader of the pack reads.
 
     XenosRecomp's vertex shaders write all 18 interpolants (16 texcoords, 2 colours), most of them 0, while
-    the pixel shaders read texcoords 0..7 at most: every unread output still costs the vertex shader a store
+    the pixel shaders read texcoords 0..7 and the two colours at most: every unread output still costs the vertex shader a store
     and the GPU room per vertex. An output goes only when its every use is a whole statement assigning it
     (nothing reads it back); the locations of the others stay as they are, so the picture is the same.
     Returns (glsl, number removed)."""
