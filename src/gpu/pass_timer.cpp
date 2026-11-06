@@ -65,7 +65,16 @@ struct Segment {
   u32 target = 0; // index into g_targetNames
   u32 draws = 0;  // 0: clears, copies and resolves before the target's first draw
   bool present = false;
+  u32 vsBool = 0, psBool = 0; // the stages' first bool constant words
 };
+
+// Per shader: draws and GPU time per bool word (collected with the timed
+// frames' segments, on the thread that collects them).
+struct BoolTotals {
+  u64 draws = 0;
+  std::unordered_map<u32, std::pair<u64, double>> words; // draws, ns
+};
+std::unordered_map<u64, BoolTotals> g_psBools, g_vsBools;
 
 struct ShaderSlot {
   std::unique_ptr<plume::RenderQueryPool> pool;
@@ -248,14 +257,9 @@ void CollectVisibility(u32 slot_index) {
 // for one fixed word they shrink a lot (bd_normal_ps: 65 registers and 1760
 // instruction slots as it is, 5 to 25 registers for fixed words). Which words
 // each shader runs with decides whether precompiled fixed-word variants pay.
-struct BoolTotals {
-  u64 draws = 0;
-  std::unordered_map<u32, u64> words;
-};
-std::unordered_map<u64, BoolTotals> g_psBools, g_vsBools;
 
 void ReportBoolsOf(const char *stage, std::unordered_map<u64, BoolTotals> &m,
-                   u32 frames) {
+                   double frames) {
   std::vector<std::pair<u64, BoolTotals *>> rows;
   for (auto &[h, t] : m)
     rows.emplace_back(h, &t);
@@ -266,22 +270,28 @@ void ReportBoolsOf(const char *stage, std::unordered_map<u64, BoolTotals> &m,
   for (auto &[h, t] : rows) {
     if (shown++ == 8)
       break;
-    std::vector<std::pair<u32, u64>> w(t->words.begin(), t->words.end());
-    std::sort(w.begin(), w.end(),
-              [](const auto &a, const auto &b) { return a.second > b.second; });
+    std::vector<std::pair<u32, std::pair<u64, double>>> w(t->words.begin(),
+                                                          t->words.end());
+    std::sort(w.begin(), w.end(), [](const auto &a, const auto &b) {
+      return a.second.second > b.second.second;
+    });
     std::string list;
     for (size_t i = 0; i < w.size() && i < 8; ++i)
-      list += fmt::format(" {:08x} {:.0f}%", w[i].first,
-                          100.0 * double(w[i].second) / double(t->draws));
+      list += fmt::format(" {:08x} {:.0f}% {:.2f}ms", w[i].first,
+                          100.0 * double(w[i].second.first) / double(t->draws),
+                          w[i].second.second / frames / 1e6);
     BD_INFO("[gpu-bools]   {} {:016x}: {:6.1f} draws/frame, {} words:{}", stage,
             h, double(t->draws) / frames, w.size(), list);
   }
 }
 
-void ReportBools(u32 frames) {
+void ReportBools(u64 frames) {
+  BD_INFO("[gpu-bools] {} timed frames, {} pixel shaders, {} vertex shaders "
+          "(draws and GPU time per first bool constant word)",
+          frames, g_psBools.size(), g_vsBools.size());
   if (frames && !g_psBools.empty()) {
-    ReportBoolsOf("ps", g_psBools, frames);
-    ReportBoolsOf("vs", g_vsBools, frames);
+    ReportBoolsOf("ps", g_psBools, double(frames));
+    ReportBoolsOf("vs", g_vsBools, double(frames));
   }
   g_psBools.clear();
   g_vsBools.clear();
@@ -384,6 +394,18 @@ void CollectShaders(u32 slot_index) {
     t.pixels += delta(i, 0);
     t.vertices += delta(i, 1);
     t.vsDraws[seg.vs] += seg.draws;
+    {
+      BoolTotals &p = g_psBools[seg.ps];
+      p.draws += seg.draws;
+      auto &pw = p.words[seg.psBool];
+      pw.first += seg.draws;
+      pw.second += ns;
+      BoolTotals &v = g_vsBools[seg.vs];
+      v.draws += seg.draws;
+      auto &vw = v.words[seg.vsBool];
+      vw.first += seg.draws;
+      vw.second += ns;
+    }
     t.targetNs[seg.target] += ns;
     g_shaderDraws += seg.draws;
   }
@@ -595,19 +617,12 @@ void MarkDraw(plume::RenderCommandList *list, u32 slot_index,
   if (!slot.open || !list)
     return;
   const u64 psHash = ShaderHash(ps);
-  {
-    BoolTotals &p = g_psBools[psHash];
-    ++p.draws;
-    ++p.words[ps_bool];
-    BoolTotals &v = g_vsBools[ShaderHash(vs)];
-    ++v.draws;
-    ++v.words[vs_bool];
-  }
   const u64 vsHash = ShaderHash(vs);
   if (!slot.segments.empty()) {
     Segment &cur = slot.segments.back();
     if (cur.draws > 0 && !cur.present && cur.ps == psHash && cur.vs == vsHash &&
-        cur.target == g_currentTarget) {
+        cur.target == g_currentTarget && cur.psBool == ps_bool &&
+        cur.vsBool == vs_bool) {
       ++cur.draws;
       return;
     }
@@ -617,6 +632,8 @@ void MarkDraw(plume::RenderCommandList *list, u32 slot_index,
   seg.vs = vsHash;
   seg.target = g_currentTarget;
   seg.draws = 1;
+  seg.vsBool = vs_bool;
+  seg.psBool = ps_bool;
   ShaderStamp(list, slot, seg);
 }
 
@@ -712,7 +729,7 @@ void Collect(u32 slot_index) {
       std::chrono::duration<double>(now - g_window_start).count();
   if (window_s >= 10.0) {
     Report(window_s);
-    ReportBools(u32(g_shaderFrames));
+    ReportBools(g_shaderFrames);
     ReportShaders(window_s);
     ReportVisibility(window_s);
     g_window_start = now;
