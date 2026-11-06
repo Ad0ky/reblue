@@ -289,8 +289,10 @@ vertices each (the pass timer's pixel and vertex counters); drawn flat grey
 (`bd_debug_flat_ps`) it still took 9.5 of its 14.5 us per draw, so two thirds
 are vertex and triangle work. `make_dk_shaders.py` now drops the vertex
 outputs no fragment shader reads (XenosRecomp writes all 18 interpolants, the
-pixel shaders read texcoords 0..7 at most): 10 of the toon vertex shader's
-18, 560 over the 56 vertex shaders. Same picture.
+pixel shaders read texcoords 0..7 and the two colours, centroid, at most): 8
+of the toon vertex shader's 18, 448 over the vertex shaders. Same picture.
+(The first version missed the colours' `centroid in` and the screen was
+black.)
 
 The fifth batch keeps the recompiled code's volatile guest accesses (its
 batch line in `localized.txt` says `volatile`): with plain accesses it

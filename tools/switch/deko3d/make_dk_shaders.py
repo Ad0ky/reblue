@@ -132,13 +132,21 @@ def compile_one(job):
         return key, stage, glsl
 
 
-IN_DECL = re.compile(r'^layout\(location = (\d+)\) in \w+ (\w+);$', re.M)
+IN_DECL = re.compile(r'^layout\(location = (\d+)\) (?:(?:flat|noperspective|centroid|sample|smooth) )*in \w+ (\w+);$', re.M)
 OUT_DECL = re.compile(r'^layout\(location = (\d+)\) out \w+ (\w+);\n', re.M)
 
 
 def read_locations(glsl):
-    """Input locations a fragment shader reads (declared and used beyond the declaration)."""
-    return {int(loc) for loc, name in IN_DECL.findall(glsl) if len(re.findall(r'\b' + name + r'\b', glsl)) > 1}
+    """Input locations a fragment shader reads (declared and used beyond the declaration).
+
+    An input declaration of another shape counts as read: its location's outputs stay. (The first version
+    missed "centroid in", the COLOR0/COLOR1 inputs, and the screen went black: 2026-11-06.)"""
+    read = {int(loc) for loc, name in IN_DECL.findall(glsl) if len(re.findall(r'\b' + name + r'\b', glsl)) > 1}
+    for line in glsl.split('\n'):
+        m = re.match(r'^layout\(location = (\d+)\).*\bin\b', line)
+        if m and not IN_DECL.match(line):
+            read.add(int(m.group(1)))
+    return read
 
 
 def strip_dead_outputs(glsl, read):
