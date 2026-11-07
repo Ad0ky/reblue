@@ -262,6 +262,17 @@ void WriteDefaultViewport(struct D3DDevice *device, GuestTexture *surface);
 std::unique_ptr<plume::RenderBuffer>
 CreateHostBuffer(plume::RenderDevice *device,
                  const plume::RenderBufferDesc &desc, const char *tag);
+// Textures and pipelines created so far and the time spent creating them
+// (the long-frame report, [hitch]).
+struct CreationCounter {
+  std::atomic<u64> count{0};
+  std::atomic<u64> us{0};
+};
+struct CreationCounters {
+  CreationCounter textures, pipelines;
+};
+extern CreationCounters g_creations;
+
 std::unique_ptr<plume::RenderTexture>
 CreateHostTexture(plume::RenderDevice *device,
                   const plume::RenderTextureDesc &desc, const char *tag);

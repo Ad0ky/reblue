@@ -40,6 +40,8 @@
 // "juego N fps" column and the console overlays). re:Blue has its own
 // renderer, so it reports them itself.
 extern "C" void RexSwitchPerfCount(unsigned id);
+// The SDK's positioned reads (switch_libc_supplement.c), whole process.
+extern "C" unsigned long long rex_sd_reads, rex_sd_read_bytes, rex_sd_read_ticks;
 #endif
 
 namespace bd::gpu {
@@ -60,6 +62,7 @@ public:
     const Clock::time_point now = Clock::now();
     if (started_) {
       const double frame_ms = Ms(last_, now);
+      NoteFrame(frame_ms, fence_ms, pace_ms);
       ++frames_;
       total_ms_ += frame_ms;
       worst_ms_ = std::max(worst_ms_, frame_ms);
@@ -90,10 +93,60 @@ public:
         ReportDeko3D(n);
 #endif
       frames_ = over_33_ = over_50_ = over_100_ = 0;
+      hitches_logged_ = 0;
       total_ms_ = worst_ms_ = acquire_ms_ = present_ms_ = fence_ms_ = pace_ms_ = 0;
       window_ = now;
     }
   }
+
+  // [hitch]: a frame over 100 ms, with what happened during it, from
+  // cumulative counters taken at every present: the GPU wait, the waits for
+  // the render thread, SD card reads (any thread), textures, pipelines and
+  // shaders created, uploads. Those that go up together with long frames are
+  // where the long frames come from. At most 20 lines per 10 s window.
+  struct Snapshot {
+    u64 sdReads = 0, sdBytes = 0, sdTicks = 0;
+    u64 textures = 0, textureUs = 0, pipelines = 0, pipelineUs = 0;
+    u64 syncUs = 0, compiles = 0, uploads = 0, draws = 0;
+  };
+  static Snapshot Take() {
+    Snapshot n;
+    n.sdReads = __atomic_load_n(&rex_sd_reads, __ATOMIC_RELAXED);
+    n.sdBytes = __atomic_load_n(&rex_sd_read_bytes, __ATOMIC_RELAXED);
+    n.sdTicks = __atomic_load_n(&rex_sd_read_ticks, __ATOMIC_RELAXED);
+    n.textures = g_creations.textures.count.load(std::memory_order_relaxed);
+    n.textureUs = g_creations.textures.us.load(std::memory_order_relaxed);
+    n.pipelines = g_creations.pipelines.count.load(std::memory_order_relaxed);
+    n.pipelineUs = g_creations.pipelines.us.load(std::memory_order_relaxed);
+    n.syncUs = rq::SyncMicrosTotal();
+#if defined(PLUME_DEKO3D)
+    if (UsingDeko3D()) {
+      const auto &st = plume::GetDeko3DStats();
+      n.compiles = st.shaderCompiles.load();
+      n.uploads = st.copyUpload.load();
+      n.draws = st.draws.load();
+    }
+#endif
+    return n;
+  }
+  void NoteFrame(double frame_ms, double fence_ms, double pace_ms) {
+    const Snapshot n = Take();
+    const Snapshot &o = snap_;
+    if (frame_ms > 100.0 && hitches_logged_ < 20) {
+      ++hitches_logged_;
+      BD_INFO("[hitch] {:.0f} ms frame: GPU wait {:.1f} ms, pacing {:.1f} ms, waits for the render thread "
+              "{:.1f} ms | SD reads {} ({:.2f} MB, {:.1f} ms) | created: {} textures ({:.1f} ms), {} pipelines "
+              "({:.1f} ms) | {} uam compiles, {} uploads, {} draws",
+              frame_ms, fence_ms, pace_ms, double(n.syncUs - o.syncUs) / 1e3, n.sdReads - o.sdReads,
+              double(n.sdBytes - o.sdBytes) / 1048576.0, double(n.sdTicks - o.sdTicks) / 19200.0,
+              n.textures - o.textures, double(n.textureUs - o.textureUs) / 1e3, n.pipelines - o.pipelines,
+              double(n.pipelineUs - o.pipelineUs) / 1e3, n.compiles - o.compiles, n.uploads - o.uploads,
+              n.draws - o.draws);
+    }
+    snap_ = n;
+  }
+  Snapshot snap_ = Take();
+  u32 hitches_logged_ = 0;
 
 #if defined(PLUME_DEKO3D)
   // The deko3d back end's counters over the window, per frame: what the GPU is asked to wait for and copy.

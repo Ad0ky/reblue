@@ -103,6 +103,7 @@ thread_local bool t_render_thread = false;
 // The record being written between Reserve and Commit.
 u64 g_pending_end = 0;
 
+std::atomic<u64> g_sync_us_total{0};
 std::atomic<u64> g_stat_issued{0}, g_stat_syncs{0}, g_stat_sync_us{0},
     g_stat_full{0};
 
@@ -465,7 +466,10 @@ void Sync(const char *site) {
                       .count();
   g_stat_syncs.fetch_add(1, std::memory_order_relaxed);
   g_stat_sync_us.fetch_add(u64(us), std::memory_order_relaxed);
+  g_sync_us_total.fetch_add(u64(us), std::memory_order_relaxed);
 }
+
+u64 SyncMicrosTotal() { return g_sync_us_total.load(std::memory_order_relaxed); }
 
 void Stats(u64 &issued, u64 &syncs, u64 &sync_us, u64 &full_waits) {
   issued = g_stat_issued.exchange(0, std::memory_order_relaxed);

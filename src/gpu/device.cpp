@@ -874,6 +874,17 @@ CreateHostBuffer(plume::RenderDevice *device,
   return buffer;
 }
 
+extern CreationCounters g_creations;
+namespace {
+void NoteCreation(CreationCounter &c, std::chrono::steady_clock::time_point since) {
+  c.count.fetch_add(1, std::memory_order_relaxed);
+  c.us.fetch_add(u64(std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::steady_clock::now() - since)
+                         .count()),
+                 std::memory_order_relaxed);
+}
+} // namespace
+
 std::unique_ptr<plume::RenderTexture>
 CreateHostTexture(plume::RenderDevice *device,
                   const plume::RenderTextureDesc &desc, const char *tag) {
@@ -881,7 +892,9 @@ CreateHostTexture(plume::RenderDevice *device,
     BD_ERROR("CreateHostTexture({}): no host device", tag ? tag : "?");
     return nullptr;
   }
+  const auto created_at = std::chrono::steady_clock::now();
   auto texture = device->createTexture(desc);
+  NoteCreation(g_creations.textures, created_at);
   if (!texture
 #if defined(REBLUE_D3D12)
       || static_cast<plume::D3D12Texture *>(texture.get())->d3d == nullptr
@@ -902,6 +915,8 @@ CreateHostTexture(plume::RenderDevice *device,
   return texture;
 }
 
+CreationCounters g_creations;
+
 std::unique_ptr<plume::RenderPipeline>
 CreateHostGraphicsPipeline(plume::RenderDevice *device,
                            const plume::RenderGraphicsPipelineDesc &desc,
@@ -910,7 +925,9 @@ CreateHostGraphicsPipeline(plume::RenderDevice *device,
     BD_ERROR("CreateHostGraphicsPipeline({}): no host device", tag ? tag : "?");
     return nullptr;
   }
+  const auto created_at = std::chrono::steady_clock::now();
   auto pipeline = device->createGraphicsPipeline(desc);
+  NoteCreation(g_creations.pipelines, created_at);
   // Both backends fail soft: a failed
   // vkCreateGraphicsPipelines/CreatePipelineState still hands back a live
   // wrapper holding a null pipeline, which only faults later at bind time.

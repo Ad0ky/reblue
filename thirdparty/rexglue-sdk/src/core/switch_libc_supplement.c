@@ -48,11 +48,16 @@ static Mutex* Franja(int fd) {
     return &g_franjas[(unsigned)fd % REX_FRANJAS];
 }
 
+/* Positioned reads so far, their bytes and their time in system ticks
+ * (19.2 MHz), whole process: reblue's long-frame report reads them. */
+unsigned long long rex_sd_reads, rex_sd_read_bytes, rex_sd_read_ticks;
+
 ssize_t pread(int fd, void* buf, size_t nbytes, off_t offset) {
     if (offset < 0) {
         errno = EINVAL;
         return -1;
     }
+    const u64 t0 = armGetSystemTick();
     Mutex* m = Franja(fd);
     mutexLock(m);
     ssize_t r = -1;
@@ -64,6 +69,10 @@ ssize_t pread(int fd, void* buf, size_t nbytes, off_t offset) {
         errno = e;
     }
     mutexUnlock(m);
+    __atomic_fetch_add(&rex_sd_reads, 1, __ATOMIC_RELAXED);
+    if (r > 0)
+        __atomic_fetch_add(&rex_sd_read_bytes, (unsigned long long)r, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&rex_sd_read_ticks, armGetSystemTick() - t0, __ATOMIC_RELAXED);
     return r;
 }
 

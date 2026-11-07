@@ -160,6 +160,8 @@ template <class W, class F> void RunDraw(u32 size, W &&write, F &&f) {
 // Records issued and run since the last call, and the times a caller waited
 // in Sync() (the profiler's report).
 void Stats(u64 &issued, u64 &syncs, u64 &sync_us, u64 &full_waits);
+// Microseconds callers have waited in Sync() since start (not reset).
+u64 SyncMicrosTotal();
 // The callers that waited most, per frame ("name n, ..."), since the last
 // call.
 std::string SyncSites(double frames);
