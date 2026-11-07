@@ -307,6 +307,33 @@ one call each instead of the recompiled byte loop (a store and a bound check
 per byte): 248 of them in the hot functions, 80 in
 `CharaVO__BuildBoneMatrices` alone, ~20% of `bdSceneNodeDrawSingle`.
 
+Flush-mode skip (`bd_cpu_flush_skip`, default on), 2026-11-07. The
+recompiled code runs vector float math with FPCR.FZ set and scalar math with
+it clear, writing FPCR at every switch, and on the A57 an `msr fpcr` drains
+the pipeline. In the CPU-bound windows of the busy castle street (18-26 fps,
+GPU 26-45 ms) the Main Thread was 80% busy, 11% of its samples on those
+writes: `sub_82278EC0` (a sphere test, 8.6% of the thread) does a vector
+subtract and a dot product between scalar code, four writes for ~40
+instructions. FZ only changes a result through a denormal (read as zero; a
+result below 2^-126 before rounding becomes zero), so `localize.py` rewrites
+vector sequences of at most four float operations between two switches into
+the checked operations of `src/platform/switch/hot_flush_skip.h`: they run
+with FZ clear and note every input, intermediate (the products and pair sums
+of a dot product) and result in 0 < |x| <= 2^-126; any one makes that
+statement switch FZ on and compute again (inputs and result through empty
+asm, so GCC neither reuses the first result nor moves it past the write).
+A sequence that ends in a jump instead of the switch back is taken when
+every path from there meets a flush-mode call (they test the mode they find)
+before any float work, call or return. GCC compiles the game code with its
+default contraction, fusing a multiply into the add or subtract it feeds; a
+checked multiply could not fuse, so a multiply whose result may reach an add
+or subtract (and the add or subtract) stays as it was: a first version
+without this rule changed results by one ulp in `localize_check.py` on
+AArch64. 73 sequences in 40 of the 843 copies; `localize_check.py` (now `--static --exec qemu-aarch64-static` for an
+AArch64 run) finds the copies equal to the originals; on QEMU 39 million random operations, biased to
+denormals and the 2^-126 boundary, matched the FZ results bit for bit.
+`bd_cpu_flush_skip = false` writes FPCR as before.
+
 ### Profile-guided optimisation
 
 GCC can optimise the game code and re:Blue's from what actually runs: hot paths

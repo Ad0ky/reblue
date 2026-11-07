@@ -14,6 +14,7 @@ every guest page either one touched. A run that loops (random pointers) is cut
 off by a timer and counted as skipped.
 
   localize_check.py <repo root> [--runs N] [--only NAME ...] [--cxx g++]
+                    [--static --exec qemu-aarch64-static]
 
 Needs a host C++20 compiler; uses the SDK's headers (simde) only.
 """
@@ -56,6 +57,8 @@ PRELUDE = r'''
 #define REX_MM_LOAD_U64(a) REX_LOAD_U64(a)
 #define REBLUE_LOOP_BARRIER() __asm__ __volatile__("" ::: "memory")
 #define REBLUE_FP_FENCE() __asm__ __volatile__("" ::: "memory")
+#include "platform/switch/hot_flush_skip.h"
+static bool g_flush_skip = true;
 
 // ---- call records
 struct Rec { unsigned id; unsigned long long hash; };
@@ -335,6 +338,9 @@ def main():
     ap.add_argument('--runs', type=int, default=40)
     ap.add_argument('--only', nargs='*')
     ap.add_argument('--cxx', default='g++')
+    # AArch64 from an x86 machine: --cxx aarch64-linux-gnu-g++ --static --exec qemu-aarch64-static
+    ap.add_argument('--static', action='store_true')
+    ap.add_argument('--exec', default='')
     ap.add_argument('--keep', help='write the test source here')
     a = ap.parse_args()
     root = os.path.abspath(a.root)
@@ -405,13 +411,13 @@ def main():
         open(cpp, 'w').write(src)
         exe = os.path.join(tmp, 'check')
         cmd = [a.cxx, '-std=c++23', '-O2', '-fno-strict-aliasing', '-w',
-               '-I', os.path.join(sdk, 'include'), '-I', os.path.join(sdk, 'thirdparty', 'simde'),
-               cpp, '-o', exe]
+               '-I', os.path.join(sdk, 'include'), '-I', os.path.join(sdk, 'thirdparty', 'simde'), '-I', os.path.join(root, 'src'),
+               cpp, '-o', exe] + (['-static'] if a.static else [])
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode:
             print(r.stderr[-6000:])
             return 2
-        return subprocess.run([exe, str(a.runs)]).returncode
+        return subprocess.run(a.exec.split() + [exe, str(a.runs)]).returncode
 
 
 if __name__ == '__main__':

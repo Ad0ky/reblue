@@ -43,15 +43,30 @@ REXCVAR_DEFINE_BOOL(bd_cpu_natives_trace, false, "Switch",
                     "Write each localized copy's first call to the log "
                     "(name, batch:position), to find which copies ran before "
                     "a crash. Read at start.");
+REXCVAR_DEFINE_BOOL(bd_cpu_flush_skip, true, "Switch",
+                    "In the localized copies, run short vector float "
+                    "sequences without switching the FPU to flush-to-zero "
+                    "and back, when no value in them is denormal (the result "
+                    "is then the same bit for bit); any denormal sends that "
+                    "operation through flush-to-zero as before. Read at "
+                    "start.");
 
 namespace {
+
+// See platform/switch/hot_flush_skip.h. Set before the first copy runs (every copy is reached
+// through NativesOn or NativeOn, which calls it).
+bool g_flush_skip = false;
 
 bool NativesOn() {
   static const bool on = [] {
     const bool v = REXCVAR_GET(bd_cpu_natives);
+#if defined(__aarch64__)
+    g_flush_skip = REXCVAR_GET(bd_cpu_flush_skip);
+#endif
     std::fprintf(stderr, "[hot] localized copies: %s (bd_cpu_natives), guest "
-                 "memory %s\n", v ? "on" : "off",
-                 REBLUE_HOT_VOLATILE ? "volatile" : "plain");
+                 "memory %s, flush-mode skip %s (bd_cpu_flush_skip)\n",
+                 v ? "on" : "off", REBLUE_HOT_VOLATILE ? "volatile" : "plain",
+                 g_flush_skip ? "on" : "off");
     return v;
   }();
   return on;
@@ -198,6 +213,10 @@ static inline void reblue_stvrx(u8 *base, u32 ea, const u8 *v) {
 }
 #define REBLUE_LOOP_BARRIER() __asm__ __volatile__("" ::: "memory")
 #define REBLUE_FP_FENCE() __asm__ __volatile__("" ::: "memory")
+
+// Flush-mode skip (bd_cpu_flush_skip): the checked vector float operations
+// localize.py writes into short vector sequences.
+#include "platform/switch/hot_flush_skip.h"
 
 // A function no hook replaces: this is its hook.
 #define REBLUE_HOT_HOOK(name, batch, index)                                    \

@@ -224,6 +224,7 @@ def localize(name, body, volatile=False):
     final = []
     for i, line in enumerate(out):
         final.append(line.replace('@WB@', wb(wbs[i])).replace('@RL@', rl(rls[i])))
+    final = speculate_flush(final)
 
     head = [f'// {name}: {len(regs)} registers localized, {len(callees)} callees, '
             f'{len(loop_heads)} loop heads, ' + ('changed-only syncs' if exact else 'full syncs'),
@@ -234,6 +235,258 @@ def localize(name, body, volatile=False):
         else:
             head.append(f'\t{reg_type(r)} l_{r}{{}};')
     return (callees, head + final + ['}']), None
+
+
+# ------------------------------------------------------- flush-mode skip
+#
+# A vector sequence between scalar code is written as
+#   enableFlushMode[Unconditional]();  <vector statements>  disableFlushMode...();
+# with straight-line code in between: two FPCR writes. Its float operations
+# are rewritten to the checked forms of reblue_nz (hot_natives.cpp), which run
+# with flush-to-zero off and note any value a denormal could have changed;
+# such a statement recomputes in flush mode. bd_cpu_flush_skip = false runs
+# the switches as before. Only sequences of at most FLUSH_SKIP_MAX operations,
+# each of a form below, are taken: past that the checks cost more than the two
+# writes they save.
+
+FLUSH_SKIP_MAX = 4
+FLUSH_ON = re.compile(r'^\tREBLUE_FP_FENCE\(\); ctx\.fpscr\.(enableFlushMode(?:Unconditional)?)\(\); REBLUE_FP_FENCE\(\);$')
+FLUSH_OFF = re.compile(r'^\tREBLUE_FP_FENCE\(\); ctx\.fpscr\.disableFlushMode(?:Unconditional)?\(\); REBLUE_FP_FENCE\(\);$')
+FZ_OPS = {'mul', 'add', 'sub', 'div', 'max', 'min', 'cmpeq', 'cmpgt', 'cmpge',
+          'cmplt', 'cmple', 'sqrt', 'dp'}
+# Vector work flush-to-zero does not touch: loads, stores, permutes, bit
+# operations, integer math, int -> float conversion (never denormal).
+FZ_NEUTRAL = {'load_ps', 'store_ps', 'load_si128', 'store_si128', 'castsi128_ps',
+              'castps_si128', 'set1_epi32', 'set1_ps', 'setzero_si128', 'setzero_ps',
+              'shuffle_epi8', 'shuffle_epi32', 'unpackhi_epi32', 'unpacklo_epi32',
+              'blend_ps', 'permute_ps', 'xor_ps', 'and_ps', 'or_ps', 'andnot_ps',
+              'or_si128', 'and_si128', 'andnot_si128', 'xor_si128', 'add_epi32',
+              'sub_epi32', 'alignr_epi8', 'cvtepi32_ps', 'slli_epi32', 'srli_epi32',
+              'srai_epi32', 'sllv_epi32', 'srlv_epi32', 'srav_epi32', 'perm_epi8_'}
+SIMDE_CALL = re.compile(r'simde_mm_(\w+)\(')
+FZ_STORE = re.compile(r'^\tsimde_mm_store_ps\((l_v\d+|v\d+|vTemp)\.f32, (.*)\);$')
+
+
+def _split_call(expr, start):
+    """expr[start] is '('; return (args, index after the matching ')')."""
+    depth, args, cur = 0, [], start + 1
+    for i in range(start, len(expr)):
+        c = expr[i]
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                args.append(expr[cur:i].strip())
+                return args, i + 1
+        elif c == ',' and depth == 1:
+            args.append(expr[cur:i].strip())
+            cur = i + 1
+    raise ValueError('unbalanced')
+
+
+def _rewrite_fz(expr, checked):
+    """The float operations of expr as reblue_nz::op(nz_acc, ...) (checked)
+    or reblue_nz::fz_op(...) (flush mode); None for anything unknown."""
+    out, i = [], 0
+    while i < len(expr):
+        m = SIMDE_CALL.search(expr, i)
+        if not m:
+            out.append(expr[i:])
+            break
+        out.append(expr[i:m.start()])
+        fn = m.group(1)
+        args, end = _split_call(expr, m.end() - 1)
+        op = fn[:-3] if fn.endswith('_ps') else None
+        if op in FZ_OPS:
+            new_args = []
+            for a in args:
+                r = _rewrite_fz(a, checked)
+                if r is None:
+                    return None
+                new_args.append(r)
+            if op == 'dp':
+                if len(new_args) != 3 or not re.fullmatch(r'0x[0-9A-Fa-f]+|\d+', new_args[2]):
+                    return None
+                tmpl, new_args = f'<{new_args[2]}>', new_args[:2]
+            else:
+                tmpl = ''
+            if checked:
+                out.append(f'reblue_nz::{op}{tmpl}(nz_acc, ' + ', '.join(new_args) + ')')
+            else:
+                out.append(f'reblue_nz::fz_{op}{tmpl}(' + ', '.join(new_args) + ')')
+        elif fn in FZ_NEUTRAL:
+            new_args = []
+            for a in args:
+                r = _rewrite_fz(a, checked)
+                if r is None:
+                    return None
+                new_args.append(r)
+            out.append(f'simde_mm_{fn}(' + ', '.join(new_args) + ')')
+        else:
+            return None
+        i = end
+    return ''.join(out)
+
+
+def _fz_statement(line):
+    """A checked statement for a vector store of float math; None if the
+    line has no float math; False if it cannot be taken."""
+    if not re.search(r'simde_mm_(?:' + '|'.join(sorted(FZ_OPS)) + r')_ps\(', line):
+        for fn in re.findall(r'simde_mm_(\w+)\(', line):
+            if fn not in FZ_NEUTRAL:
+                return False
+        return None
+    m = FZ_STORE.match(line)
+    if not m or 'REX_' in line or 'REBLUE_' in line or 'base' in line:
+        return False  # only register operands: the statement is recomputed
+    dst, expr = m.groups()
+    checked, plain = _rewrite_fz(expr, True), _rewrite_fz(expr, False)
+    if checked is None or plain is None:
+        return False
+    return ('\t{ simde__m128 nz_r; bool nz_ok = false; if (g_flush_skip) { '
+            'reblue_nz::Acc nz_acc = reblue_nz::Start(); '
+            f'nz_r = {checked}; nz_ok = reblue_nz::Ok(nz_acc); '
+            'if (!nz_ok) { REBLUE_FP_FENCE(); ctx.fpscr.enableFlushMode(); REBLUE_FP_FENCE(); } } '
+            f'if (!nz_ok) nz_r = {plain}; simde_mm_store_ps({dst}.f32, nz_r); }}',
+            checked.count('reblue_nz::'))
+
+
+FLOW_GOTO = re.compile(r'^\tgoto (loc_[0-9A-Fa-f]+);$')
+FLOW_IF_GOTO = re.compile(r'^\tif \([^{};]*\) goto (loc_[0-9A-Fa-f]+);$')
+
+
+def _fz_free(s):
+    """True for a line flush-to-zero cannot affect and that leaves the copy's
+    straight-line flow alone (labels and gotos are followed by the caller)."""
+    if ('ctx' in s or 'return' in s or 'FlushMode' in s
+            or re.match(r'\s*(?:(?:if|else|for|while|switch|do)\b|[{}])', s)
+            or re.search(r'\b(?:double|float)\(|\.f64\b|(?<![.\w])(?:l_)?f\d+\.', s)):
+        return False
+    return all(fn in FZ_NEUTRAL for fn in SIMDE_CALL.findall(s))
+
+
+def _switch_comes_first(lines, start, labels):
+    """Every path from lines[start] reaches a flush-mode call before anything
+    flush-to-zero affects (and before a call or a return)."""
+    stack, seen = [start], set()
+    while stack:
+        k = stack.pop()
+        while k not in seen:
+            seen.add(k)
+            if k >= len(lines):
+                return False
+            s = lines[k]
+            if FLUSH_ON.match(s) or FLUSH_OFF.match(s):
+                break
+            g = FLOW_GOTO.match(s)
+            if g:
+                if g.group(1) not in labels:
+                    return False
+                k = labels[g.group(1)]
+                continue
+            g = FLOW_IF_GOTO.match(s)
+            if g and not re.search(r'\.f64\b|\bf\d+\.', s):
+                if g.group(1) not in labels:
+                    return False
+                stack.append(labels[g.group(1)])
+                k += 1
+                continue
+            if LABEL.match(s) or s.strip() == 'REBLUE_LOOP_BARRIER();' or _fz_free(s):
+                k += 1
+                continue
+            return False
+    return True
+
+
+def _fusion_sets(lines):
+    """Registers a vector multiply writes, and registers a vector add or
+    subtract reads, anywhere in the copy. The game code is compiled with
+    GCC's default contraction, which fuses a multiply into the add or
+    subtract it feeds (one rounding instead of two); a checked operation
+    keeps its values apart and could not fuse, so a multiply whose result
+    may reach an add or subtract, or an add or subtract that may read a
+    multiply's result, is left as it is."""
+    mul_dst, addsub_src = set(), set()
+    for s in lines:
+        m = re.match(r'^\tsimde_mm_store_ps\(([\w.]+?)\.f32, (.*)\);$', s)
+        if not m:
+            continue
+        if 'simde_mm_mul_ps(' in m.group(2):
+            mul_dst.add(m.group(1))
+        if re.search(r'simde_mm_(?:add|sub)_ps\(', m.group(2)):
+            addsub_src.update(re.findall(r'simde_mm_load_ps\(([\w.]+?)\.f32\)', m.group(2)))
+    return mul_dst, addsub_src
+
+
+def _may_fuse(line, mul_dst, addsub_src):
+    m = FZ_STORE.match(line)
+    if not m:
+        return False
+    dst, expr = m.groups()
+    has_mul = 'simde_mm_mul_ps(' in expr
+    has_addsub = re.search(r'simde_mm_(?:add|sub)_ps\(', expr) is not None
+    if has_mul and has_addsub:
+        return True  # a multiply-add in one statement
+    if has_mul and dst in addsub_src:
+        return True
+    if has_addsub and set(re.findall(r'simde_mm_load_ps\(([\w.]+?)\.f32\)', expr)) & mul_dst:
+        return True
+    return False
+
+
+def speculate_flush(lines):
+    mul_dst, addsub_src = _fusion_sets(lines)
+    labels = {}
+    for k, s in enumerate(lines):
+        m = LABEL.match(s)
+        if m:
+            labels[m.group(1)] = k
+    out, i = [], 0
+    while i < len(lines):
+        m = FLUSH_ON.match(lines[i])
+        if not m:
+            out.append(lines[i])
+            i += 1
+            continue
+        # The sequence ends at the switch back to scalar, or where the flow
+        # leaves straight-line code: then every path from there must meet a
+        # flush-mode call (they test the mode they find) before anything the
+        # mode affects, and the sequence just stops without a switch.
+        j, body, ops, end = i + 1, [], 0, None
+        while j < len(lines):
+            s = lines[j]
+            if FLUSH_OFF.match(s):
+                end = 'switch'
+                break
+            if LABEL.match(s) or FLOW_GOTO.match(s) or FLOW_IF_GOTO.match(s):
+                end = 'flow' if _switch_comes_first(lines, j, labels) else None
+                break
+            if ('ctx.' in s or 'FlushMode' in s
+                    or re.match(r'\s*(?:(?:if|else|for|while|switch|do|return)\b|[{}])', s)
+                    or re.search(r'\b(?:double|float)\(|\.f64\b|(?<![.\w])(?:l_)?f\d+\.', s)):
+                break
+            st = _fz_statement(s)
+            if st is False or (st is not None and _may_fuse(s, mul_dst, addsub_src)):
+                break
+            if st is None:
+                body.append(s)
+            else:
+                body.append(st[0])
+                ops += st[1]
+            j += 1
+        if end is None or ops == 0 or ops > FLUSH_SKIP_MAX:
+            out.append(lines[i])
+            i += 1
+            continue
+        out.append(f'\tREBLUE_FP_FENCE(); if (!g_flush_skip) ctx.fpscr.{m.group(1)}(); REBLUE_FP_FENCE();')
+        out += body
+        if end == 'switch':
+            out.append('\tREBLUE_FP_FENCE(); ctx.fpscr.disableFlushMode(); REBLUE_FP_FENCE();')
+            i = j + 1
+        else:
+            i = j
+    return out
 
 
 # ---------------------------------------------------------------- sync plan
