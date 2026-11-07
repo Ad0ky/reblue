@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <plume_render_interface.h>
+#include <rex/cvar.h>
 #if defined(PLUME_DEKO3D)
 #include <plume_deko3d.h>
 #endif
@@ -286,7 +287,8 @@ void ReportBoolsOf(const char *stage, std::unordered_map<u64, BoolTotals> &m,
 }
 
 void ReportBools(u64 frames) {
-  BD_INFO("[gpu-bools] {} timed frames, {} pixel shaders, {} vertex shaders "
+  if (frames)
+    BD_INFO("[gpu-bools] {} timed frames, {} pixel shaders, {} vertex shaders "
           "(draws and GPU time per first bool constant word)",
           frames, g_psBools.size(), g_vsBools.size());
   if (frames && !g_psBools.empty()) {
@@ -519,9 +521,17 @@ void Report(double window_s) {
 
 } // namespace
 
+REXCVAR_DEFINE_INT32(bd_gpu_profile, 1, "Switch",
+                     "GPU timing in the log: 0 off, 1 render passes ([gpu-passes], "
+                     "about 10 timestamps a frame), 2 also per shader, bool words and "
+                     "hidden draws ([gpu-shaders], [gpu-bools], [gpu-hidden]: one frame "
+                     "in 8 and one in 32 are timed draw by draw, which costs GPU time). "
+                     "Read at start.");
+
 void BeginFrame(plume::RenderDevice *device, plume::RenderCommandList *list,
                 u32 slot_index) {
-  if (g_failed || !device || !list || slot_index >= kNumFrames)
+  static const int level = REXCVAR_GET(bd_gpu_profile);
+  if (level <= 0 || g_failed || !device || !list || slot_index >= kNumFrames)
     return;
   Slot &slot = g_slots[slot_index];
   if (!slot.pool) {
@@ -542,7 +552,7 @@ void BeginFrame(plume::RenderDevice *device, plume::RenderCommandList *list,
   vis.ready = false;
   vis.open = false;
 #if defined(PLUME_DEKO3D)
-  if (!g_visFailed && UsingDeko3D() &&
+  if (level >= 2 && !g_visFailed && UsingDeko3D() &&
       g_frameCounter % kVisFrameEvery == kVisFramePhase) {
     if (!vis.counters) {
       vis.counters = device->createQueryPool(2 * (kMaxVisDraws + 1));
@@ -559,7 +569,8 @@ void BeginFrame(plume::RenderDevice *device, plume::RenderCommandList *list,
   ShaderSlot &shaders = g_shaderSlots[slot_index];
   shaders.ready = false;
   shaders.open = false;
-  if (g_shaderFailed || (g_frameCounter++ % kShaderFrameEvery) != 0)
+  if (level < 2 || g_shaderFailed ||
+      (g_frameCounter++ % kShaderFrameEvery) != 0)
     return;
   if (!shaders.pool) {
     shaders.pool = device->createQueryPool(kMaxShaderStamps);

@@ -110,6 +110,9 @@ bd_interp_min_fps = 36            # below this, no frame smoothing and a 30 fps 
 
 # Renderer
 bd_render_thread = true           # draws recorded on their own thread; false = on the game's draw thread
+
+# Diagnostics
+bd_gpu_profile = 1                # GPU timing in the log: 0 off, 1 render passes, 2 per shader (costs GPU time)
 ```
 
 What the speed-related options do:
