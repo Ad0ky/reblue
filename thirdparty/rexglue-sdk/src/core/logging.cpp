@@ -10,6 +10,8 @@
  */
 
 #include <algorithm>
+#include <cstdio>
+#include <string>
 #include <cctype>
 #include <charconv>
 #include <filesystem>
@@ -20,6 +22,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <spdlog/sinks/base_sink.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
@@ -54,6 +57,54 @@ REXCVAR_DEFINE_INT32(log_flush_interval, 0, "Log", "Periodic flush interval in s
 namespace rex {
 
 namespace {
+
+#if defined(__SWITCH__)
+// The log file on the Switch (reblue, 2026-11-07): a line is formatted into
+// memory on the thread that logs it, and the file is written only at a flush:
+// the periodic flush (log_flush_interval, on spdlog's own thread), a warning
+// or worse (flush_on), and shutdown. With basic_file_sink each line went
+// through newlib's small FILE buffer and, whenever it filled, an SD card
+// write (an IPC call) on the game's thread: 1.2% of the main thread in a
+// profile. Lost Odyssey moved its log writes off the game threads the same way.
+class BufferedFileSink final : public spdlog::sinks::base_sink<std::mutex> {
+ public:
+  explicit BufferedFileSink(const std::string& path) {
+    file_ = std::fopen(path.c_str(), "ab");
+    if (file_)
+      std::setvbuf(file_, nullptr, _IOFBF, 64 * 1024);
+    pending_.reserve(kWriteNow);
+  }
+  ~BufferedFileSink() override {
+    std::lock_guard lock(mutex_);
+    WriteLocked();
+    if (file_)
+      std::fclose(file_);
+  }
+
+ protected:
+  void sink_it_(const spdlog::details::log_msg& msg) override {
+    spdlog::memory_buf_t formatted;
+    formatter_->format(msg, formatted);
+    pending_.append(formatted.data(), formatted.size());
+    // A flood of lines between two flushes: written here, to bound memory.
+    if (pending_.size() >= kWriteNow)
+      WriteLocked();
+  }
+  void flush_() override { WriteLocked(); }
+
+ private:
+  static constexpr size_t kWriteNow = 1024 * 1024;
+  void WriteLocked() {
+    if (!file_ || pending_.empty())
+      return;
+    std::fwrite(pending_.data(), 1, pending_.size(), file_);
+    std::fflush(file_);
+    pending_.clear();
+  }
+  std::FILE* file_ = nullptr;
+  std::string pending_;
+};
+#endif
 
 std::vector<LogCategoryEntry> g_registry;
 spdlog::sink_ptr g_console_sink;
@@ -268,7 +319,11 @@ void InitLogging(const LogConfig& config) {
     resolved_path = NextSequentialLogPath(log_dir, config.app_name);
   }
   if (!resolved_path.empty()) {
+#if defined(__SWITCH__)
+    auto sink = std::make_shared<BufferedFileSink>(resolved_path.string());
+#else
     auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(resolved_path.string(), false);
+#endif
     sink->set_level(spdlog::level::trace);
     sink->set_pattern(config.file_pattern);
     g_file_sink = sink;
