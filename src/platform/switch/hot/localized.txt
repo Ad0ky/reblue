@@ -865,3 +865,18 @@ sub_822BA588
 sub_823659B0
 bdInputControllerUpdate
 bdRenderSortBucketSetup
+# Sixth batch (volatile guest memory): the game's audio effect thread (an
+# XThread at 95% of a core in the 2026-11-09 sessions, sub_8267F4D8 60% of
+# it, processing 256-sample blocks); when it runs late the audio output gets
+# no data (crackling). Volatile like the fifth: the thread shares its buffers.
+sub_8267F4D8
+sub_8267E9A8
+sub_8267EF68
+sub_8267EEC0
+sub_8267E640
+sub_8267E710
+sub_8267E510
+sub_8267EBE8
+sub_8267EA78
+sub_8267ED58
+sub_8267DE40

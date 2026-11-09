@@ -22,6 +22,14 @@ constexpr size_t kAhead = 10;
 // Display-order frames kept behind the one asked for: the game asks for each
 // frame once, but an extra draw of the same one must still find it.
 constexpr u64 kBehind = 2;
+// MPEG-1 puts a reference picture out after the B pictures that follow it in
+// the stream: once FFmpeg has put out a picture this far past an index in
+// stream order, that index is not coming any more.
+constexpr u64 kReorder = 8;
+// Hard limit on the decoded frames held (35 MB at 720p). Past kAhead the
+// decoder only goes on while a caller waits, for a reference picture that
+// comes out after later B pictures; that never needs this many.
+constexpr size_t kMaxHeld = kAhead + 2 * kReorder;
 // Program stream read size.
 constexpr size_t kReadSize = 512 * 1024;
 
@@ -154,6 +162,10 @@ void SfdVideo::Fail(std::string error) {
 
 std::shared_ptr<const Picture> SfdVideo::ByDecodeIndex(u64 index, int waitMs) {
   std::unique_lock lock(mutex_);
+  // The same picture again (a paused movie presents one buffer for many
+  // frames): it may have left the queue since.
+  if (last_ && last_->decodeIndex == index)
+    return last_;
   wanted_ = std::max(wanted_, index);
   consumed_.notify_all();
   const auto deadline =
@@ -167,6 +179,7 @@ std::shared_ptr<const Picture> SfdVideo::ByDecodeIndex(u64 index, int waitMs) {
       const u64 shown = found->displayIndex;
       while (!ready_.empty() && ready_.front()->displayIndex + kBehind < shown)
         ready_.pop_front();
+      last_ = found;
       consumed_.notify_all();
       return found;
     }
@@ -177,6 +190,11 @@ std::shared_ptr<const Picture> SfdVideo::ByDecodeIndex(u64 index, int waitMs) {
     consumed_.notify_all();
     if (failed_.load(std::memory_order_relaxed) || stop_)
       return nullptr;
+    // FFmpeg is well past it: it was dropped, or has left the queue. Waiting
+    // would only let the decoder run on (2026-11-09: ev213_00.sfd waited
+    // 2 x 100 ms a frame and filled the heap until std::bad_alloc).
+    if (decodedAny_ && maxDecoded_ > index + kReorder)
+      return nullptr;
     // The decoder must not stop for a full queue now: what it holds can be
     // later pictures in stream order (B pictures) ahead of this one.
     ++waiting_;
@@ -186,8 +204,10 @@ std::shared_ptr<const Picture> SfdVideo::ByDecodeIndex(u64 index, int waitMs) {
     --waiting_;
     if (timedOut) {
       for (const auto &p : ready_)
-        if (p->decodeIndex == index)
+        if (p->decodeIndex == index) {
+          last_ = p;
           return p;
+        }
       return nullptr;
     }
   }
@@ -460,11 +480,14 @@ bool SfdVideo::Decode(const std::vector<u8> *unit, int type) {
     ++stats_.decoded;
     // Wait for room, unless someone is waiting for a frame.
     consumed_.wait(lock, [&] {
-      return stop_ || ready_.size() < kAhead || waiting_ > 0 ||
-             picture->decodeIndex <= wanted_;
+      return stop_ || ready_.size() < kAhead ||
+             ((waiting_ > 0 || picture->decodeIndex <= wanted_) &&
+              ready_.size() < kMaxHeld);
     });
     if (stop_)
       return false;
+    decodedAny_ = true;
+    maxDecoded_ = std::max(maxDecoded_, picture->decodeIndex);
     ready_.push_back(std::move(picture));
     produced_.notify_all();
     lock.unlock();

@@ -383,3 +383,16 @@ How to measure on the console:
 - Shift-JIS conversion: newlib has no iconv, so non-ASCII text in guest debug
   prints and in mod rows added to game tables becomes `?`.
 - Performance work still open: PGO, function ordering, patched NVK.
+
+2026-11-09 sessions (further into the game). Crackling: the audio output got
+no data from the game in 5855 and 11643 requests (12 in the castle runs), all
+in windows where one game XThread, the audio effect thread, was at 80-95% of
+a core (`sub_8267F4D8`, 256-sample blocks, 60% of it). Its eleven functions
+are the sixth batch of localized copies (volatile; `localize_check.py` equal on
+AArch64, 40 runs each). Crash in the cutscene `ev213_00.sfd`: the game
+presented the same movie buffer frame after frame, `SfdVideo::ByDecodeIndex`
+waited 100 ms for a picture that had left the queue, and while a caller
+waited the decoder had no limit: the heap went from 1.8 to 3 GB in 30 s and
+an allocation threw `std::bad_alloc`. Now the last picture handed out is
+kept for a repeat, a picture FFmpeg is more than 8 stream positions past
+returns at once, and the queue never holds more than 26 frames.
