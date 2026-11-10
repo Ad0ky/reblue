@@ -151,9 +151,22 @@ fi
 # HLSL, through DXC, SPIRV-Cross and tools/switch/deko3d/spv_to_dk_glsl.py, into out/switch-host/deko3d_shaders.cpp.
 if [ "${DEKO3D:-1}" = 1 ]; then
     if ! command -v spirv-dis >/dev/null; then
-        log "Installing spirv-tools (spirv-dis)"
-        (apt-get update -qq && apt-get install -y -qq --no-install-recommends spirv-tools) >/dev/null \
-            || die "spirv-dis is missing and spirv-tools could not be installed"
+        # The packages are kept in out/switch-host/apt-cache: each build runs in a fresh container, and on
+        # 2026-11-10 the Ubuntu mirror was mid-sync ("File has unexpected size") and failed the build.
+        apt_cache="$host/apt-cache"
+        mkdir -p "$apt_cache/partial"
+        if ls "$apt_cache"/spirv-tools_*.deb >/dev/null 2>&1; then
+            log "Installing spirv-tools (spirv-dis) from out/switch-host/apt-cache"
+            dpkg -i "$apt_cache"/*.deb >/dev/null || rm -f "$apt_cache"/*.deb
+        fi
+        n=0
+        while ! command -v spirv-dis >/dev/null && [ $n -lt 3 ]; do
+            n=$((n + 1))
+            log "Installing spirv-tools (spirv-dis), try $n of 3"
+            (apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+                -o Dir::Cache::archives="$apt_cache" spirv-tools) >/dev/null || sleep 20
+        done
+        command -v spirv-dis >/dev/null || die "spirv-dis is missing and spirv-tools could not be installed (Ubuntu mirror unreachable or mid-sync: try again in a few minutes)"
     fi
     spirv_cross_tag="vulkan-sdk-1.4.363.0"
     spirv_cross="$host/spirv-cross-$spirv_cross_tag"
