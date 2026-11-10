@@ -396,3 +396,11 @@ waited the decoder had no limit: the heap went from 1.8 to 3 GB in 30 s and
 an allocation threw `std::bad_alloc`. Now the last picture handed out is
 kept for a repeat, a picture FFmpeg is more than 8 stream positions past
 returns at once, and the queue never holds more than 26 frames.
+2026-11-10 run: ev213_00.sfd played to the end but 1176 of its 4636 frames
+had no picture from FFmpeg; with the slices skipped the game's frame buffer
+still held an older picture, shown again. Any missing picture now hands the
+movie back to the game's decoder (correct from its next I picture, at most
+half a second), with the queue's state in the warning to find the cause.
+Crackling: 830 audio requests without data in 29 minutes (5855 and 11643
+before the sixth batch), all in 4 windows where the effect thread was still
+at 75-92%: what is left there is its delay-line reads (dependent loads).

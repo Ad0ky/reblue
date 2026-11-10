@@ -90,6 +90,8 @@ public:
   u32 Height() const { return height_; }
   bool Failed() const { return failed_.load(std::memory_order_relaxed); }
   std::string LastError() const;
+  // The queue for a log line: stream indices held, newest, last returned.
+  std::string Describe() const;
   StreamStats Stats() const;
 
 private:

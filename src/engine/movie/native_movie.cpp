@@ -308,15 +308,16 @@ void Present(u32 buffer, u32 w, u32 h, u32 out) {
     return;
   if (!frame) {
     ++s->missing;
-    if (s->video->Failed() || checking) {
-      // The guest decoder has to come back; while slices were skipped the
-      // pictures it holds are empty until its next I picture.
-      s->state = State::Off;
-      BD_WARN("native movie: {}: no picture {} from FFmpeg ({}); the game's "
-              "decoder plays the rest",
-              s->Label(), picture,
-              s->video->Failed() ? s->video->LastError() : "not in time");
-    }
+    // The guest decoder has to come back; while slices were skipped the
+    // pictures it holds are empty until its next I picture. Any picture
+    // FFmpeg cannot give does that: the frame buffer holds an old picture,
+    // shown again (2026-11-10, ev213_00.sfd: 1176 of 4636 frames).
+    s->state = State::Off;
+    BD_WARN("native movie: {}: no picture {} from FFmpeg ({}; {}); the "
+            "game's decoder plays the rest",
+            s->Label(), picture,
+            s->video->Failed() ? s->video->LastError() : "not in time",
+            s->video->Describe());
     return;
   }
   if (frame->Width() != w || frame->Height() != h) {

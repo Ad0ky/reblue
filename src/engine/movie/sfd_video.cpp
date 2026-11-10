@@ -142,6 +142,23 @@ void SfdVideo::Append(std::string path) {
   appended_.push_back(std::move(path));
 }
 
+std::string SfdVideo::Describe() const {
+  std::lock_guard lock(mutex_);
+  u64 lo = ~0ull, hi = 0;
+  for (const auto &p : ready_) {
+    lo = std::min(lo, p->decodeIndex);
+    hi = std::max(hi, p->decodeIndex);
+  }
+  std::string held = ready_.empty() ? std::string("none")
+                                    : std::to_string(lo) + ".." + std::to_string(hi);
+  return "held " + held + " (" + std::to_string(ready_.size()) +
+         "), newest decoded " +
+         (decodedAny_ ? std::to_string(maxDecoded_) : std::string("none")) +
+         ", last handed out " +
+         (last_ ? std::to_string(last_->decodeIndex) : std::string("none")) +
+         ", asked up to " + std::to_string(wanted_);
+}
+
 std::string SfdVideo::LastError() const {
   std::lock_guard lock(mutex_);
   return error_;
