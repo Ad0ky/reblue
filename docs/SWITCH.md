@@ -404,3 +404,12 @@ half a second), with the queue's state in the warning to find the cause.
 Crackling: 830 audio requests without data in 29 minutes (5855 and 11643
 before the sixth batch), all in 4 windows where the effect thread was still
 at 75-92%: what is left there is its delay-line reads (dependent loads).
+2026-11-10, second run: the fallback named the cause. ev213_00.sfd asked for
+picture 87 after 88 (held 88..98): the game goes back to the previous
+picture, which had left the queue. The pictures handed out or passed over
+lately (10) are now kept for that. The fallback to the game's decoder made
+the rest of the cutscene stutter (CPU 40-66 ms a frame). Crackling with
+audio_maxqframes = 32 too: 1361 requests without data, all in 30 s where the
+effect thread sat at 93% of a core, so a longer queue cannot cover it. The
+sixth batch is now plain (15 KB instead of 17.7 KB for sub_8267F4D8: the
+delay-line reads can overlap).

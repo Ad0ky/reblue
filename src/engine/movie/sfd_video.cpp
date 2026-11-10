@@ -30,6 +30,11 @@ constexpr u64 kReorder = 8;
 // decoder only goes on while a caller waits, for a reference picture that
 // comes out after later B pictures; that never needs this many.
 constexpr size_t kMaxHeld = kAhead + 2 * kReorder;
+// Pictures handed out or passed lately (14 MB at 720p), kept for the game
+// asking for one again: it
+// repeats a buffer while its own decoder runs late, and can go back to the
+// previous picture after a newer one (2026-11-10, ev213_00.sfd: 87 after 88).
+constexpr size_t kRecent = 10;
 // Program stream read size.
 constexpr size_t kReadSize = 512 * 1024;
 
@@ -155,7 +160,8 @@ std::string SfdVideo::Describe() const {
          "), newest decoded " +
          (decodedAny_ ? std::to_string(maxDecoded_) : std::string("none")) +
          ", last handed out " +
-         (last_ ? std::to_string(last_->decodeIndex) : std::string("none")) +
+         (recent_.empty() ? std::string("none")
+                          : std::to_string(recent_.back()->decodeIndex)) +
          ", asked up to " + std::to_string(wanted_);
 }
 
@@ -177,12 +183,19 @@ void SfdVideo::Fail(std::string error) {
   produced_.notify_all();
 }
 
+void SfdVideo::Remember(std::shared_ptr<const Picture> picture) {
+  recent_.push_back(std::move(picture));
+  while (recent_.size() > kRecent)
+    recent_.pop_front();
+}
+
 std::shared_ptr<const Picture> SfdVideo::ByDecodeIndex(u64 index, int waitMs) {
   std::unique_lock lock(mutex_);
   // The same picture again (a paused movie presents one buffer for many
   // frames): it may have left the queue since.
-  if (last_ && last_->decodeIndex == index)
-    return last_;
+  for (auto it = recent_.rbegin(); it != recent_.rend(); ++it)
+    if ((*it)->decodeIndex == index)
+      return *it;
   wanted_ = std::max(wanted_, index);
   consumed_.notify_all();
   const auto deadline =
@@ -194,9 +207,11 @@ std::shared_ptr<const Picture> SfdVideo::ByDecodeIndex(u64 index, int waitMs) {
       std::shared_ptr<const Picture> found = ready_[i];
       // Frames shown before this one are done with.
       const u64 shown = found->displayIndex;
-      while (!ready_.empty() && ready_.front()->displayIndex + kBehind < shown)
+      while (!ready_.empty() && ready_.front()->displayIndex + kBehind < shown) {
+        Remember(ready_.front()); // may still be asked for, if late
         ready_.pop_front();
-      last_ = found;
+      }
+      Remember(found);
       consumed_.notify_all();
       return found;
     }
@@ -222,7 +237,7 @@ std::shared_ptr<const Picture> SfdVideo::ByDecodeIndex(u64 index, int waitMs) {
     if (timedOut) {
       for (const auto &p : ready_)
         if (p->decodeIndex == index) {
-          last_ = p;
+          Remember(p);
           return p;
         }
       return nullptr;

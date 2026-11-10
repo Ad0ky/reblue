@@ -132,7 +132,8 @@ private:
   mutable std::mutex mutex_;
   std::condition_variable produced_, consumed_;
   std::deque<std::shared_ptr<Picture>> ready_; // display order
-  std::shared_ptr<const Picture> last_;        // the one last returned
+  std::deque<std::shared_ptr<const Picture>> recent_; // last handed out
+  void Remember(std::shared_ptr<const Picture> picture); // mutex_ held
   u64 maxDecoded_ = 0;   // highest stream index put in ready_
   bool decodedAny_ = false;
   std::vector<std::string> appended_;

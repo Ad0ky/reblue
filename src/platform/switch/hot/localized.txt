@@ -865,10 +865,13 @@ sub_822BA588
 sub_823659B0
 bdInputControllerUpdate
 bdRenderSortBucketSetup
-# Sixth batch (volatile guest memory): the game's audio effect thread (an
+# Sixth batch (plain guest memory): the game's audio effect thread (an
 # XThread at 95% of a core in the 2026-11-09 sessions, sub_8267F4D8 60% of
 # it, processing 256-sample blocks); when it runs late the audio output gets
-# no data (crackling). Volatile like the fifth: the thread shares its buffers.
+# no data (crackling). First volatile like the fifth: 2026-11-10 it still hit
+# 93% of a core, its time in chains of dependent delay-line reads that
+# volatile accesses keep the compiler from overlapping. bd_cpu_natives_off =
+# "sixth" turns it off if plain accesses misbehave.
 sub_8267F4D8
 sub_8267E9A8
 sub_8267EF68
