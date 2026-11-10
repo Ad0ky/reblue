@@ -413,3 +413,11 @@ audio_maxqframes = 32 too: 1361 requests without data, all in 30 s where the
 effect thread sat at 93% of a core, so a longer queue cannot cover it. The
 sixth batch is now plain (15 KB instead of 17.7 KB for sub_8267F4D8: the
 delay-line reads can overlap).
+2026-11-10, third run: with recent pictures kept, ev213_00.sfd showed every
+picture it asked for (0 not ready), and jumped back and forth: the game asks
+for an earlier picture in display order after a later one. Playback is now
+forward only (the newest picture shown stays), and the end-of-movie line
+counts those requests. Crackling unchanged with plain copies (effect thread
+still 88-94%): it shared the time slices with Main and Draw at 0x3B; its
+thread (entry 0x8268A410, `switch_guest_sound_entries`) now gets the sound
+thread's priority, 0x3A.

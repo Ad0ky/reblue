@@ -162,7 +162,8 @@ std::string SfdVideo::Describe() const {
          ", last handed out " +
          (recent_.empty() ? std::string("none")
                           : std::to_string(recent_.back()->decodeIndex)) +
-         ", asked up to " + std::to_string(wanted_);
+         ", asked up to " + std::to_string(wanted_) + ", " +
+         std::to_string(backward_) + " asked for after a later one";
 }
 
 std::string SfdVideo::LastError() const {
@@ -189,8 +190,29 @@ void SfdVideo::Remember(std::shared_ptr<const Picture> picture) {
     recent_.pop_front();
 }
 
+std::shared_ptr<const Picture>
+SfdVideo::Forward(std::shared_ptr<const Picture> picture) {
+  // Never back in display order: ev213_00.sfd asks for an earlier picture
+  // after a later one in about a quarter of its frames, and showing it made
+  // the cutscene jump back and forth (2026-11-10). The newest one shown
+  // stays on screen instead.
+  if (!picture)
+    return picture;
+  if (newest_ && picture->displayIndex < newest_->displayIndex) {
+    ++backward_;
+    return newest_;
+  }
+  newest_ = picture;
+  return picture;
+}
+
 std::shared_ptr<const Picture> SfdVideo::ByDecodeIndex(u64 index, int waitMs) {
   std::unique_lock lock(mutex_);
+  return Forward(Find(lock, index, waitMs));
+}
+
+std::shared_ptr<const Picture>
+SfdVideo::Find(std::unique_lock<std::mutex> &lock, u64 index, int waitMs) {
   // The same picture again (a paused movie presents one buffer for many
   // frames): it may have left the queue since.
   for (auto it = recent_.rbegin(); it != recent_.rend(); ++it)

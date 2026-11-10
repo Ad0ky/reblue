@@ -38,6 +38,8 @@
 #include <rex/vec128.h>
 
 #if REX_PLATFORM_SWITCH
+#include <cstdlib>
+#include <string>
 #include <string_view>
 
 #include "../core/threading_switch.h"
@@ -63,9 +65,37 @@ REXCVAR_DEFINE_INT32(switch_guest_sound_priority, 0x3A, "Kernel",
                      "(lower number = more urgent). 59 = the guest default.")
     .range(0x2C, 0x3B);
 
+// re:Blue (2026-11-10): the game's audio effect thread (unnamed, started at
+// 0x8268A410, its reverb in sub_8267F4D8) sat at 88-94% of a core in busy
+// cutscenes, sharing the time slices with Main and Draw at 0x3B, and the
+// audio output found no data ~1350 times a run even with a 32-frame queue.
+// It waits for its next block between runs, as the sound thread does.
+REXCVAR_DEFINE_STRING(switch_guest_sound_entries, "8268A410", "Kernel",
+                      "Switch: start addresses (hex, comma-separated) of "
+                      "more guest threads that get "
+                      "switch_guest_sound_priority. Empty = none.");
+
 namespace {
-bool IsGuestSoundThread(std::string_view name) {
-  return name.starts_with("SoundThread");
+bool IsGuestSoundEntry(uint32_t start) {
+  if (!start)
+    return false;
+  const std::string list = REXCVAR_GET(switch_guest_sound_entries);
+  size_t i = 0;
+  while (i < list.size()) {
+    size_t j = list.find(',', i);
+    if (j == std::string::npos)
+      j = list.size();
+    const std::string item = list.substr(i, j - i);
+    char *end = nullptr;
+    const unsigned long v = std::strtoul(item.c_str(), &end, 16);
+    if (end != item.c_str() && uint32_t(v) == start)
+      return true;
+    i = j + 1;
+  }
+  return false;
+}
+bool IsGuestSoundThread(std::string_view name, uint32_t start) {
+  return name.starts_with("SoundThread") || IsGuestSoundEntry(start);
 }
 }  // namespace
 #endif
@@ -210,7 +240,7 @@ void XThread::set_name(const std::string_view name) {
 #if REX_PLATFORM_SWITCH
     // The game names its threads once they run (SetThreadName), after the
     // start set the guest priority.
-    if (guest_thread_ && IsGuestSoundThread(name))
+    if (guest_thread_ && IsGuestSoundThread(name, creation_params_.start_address))
       thread_->set_priority(REXCVAR_GET(switch_guest_sound_priority));
 #endif
   }
@@ -370,9 +400,9 @@ namespace {
 // the GPU and the kernel's own workers. This is the scheme MarathonRecomp-NX
 // ships with. Host threads are told apart by the name their owner gives them
 // before Create().
-int SwitchPriorityFor(bool guest_thread, std::string_view name) {
+int SwitchPriorityFor(bool guest_thread, std::string_view name, uint32_t start) {
   if (guest_thread) {
-    return IsGuestSoundThread(name) ? REXCVAR_GET(switch_guest_sound_priority)
+    return IsGuestSoundThread(name, start) ? REXCVAR_GET(switch_guest_sound_priority)
                                     : REX_SWITCH_PRIO_GUEST;
   }
   // set_name() stores the name with the handle appended ("Audio Worker (F8000014)"),
@@ -497,7 +527,8 @@ X_STATUS XThread::Create() {
   thread_ = rex::thread::Thread::Create(params, [this]() {
     rex::initialize_seh_thread();
 #if REX_PLATFORM_SWITCH
-    RexSwitchSetCurrentThreadPriority(SwitchPriorityFor(guest_thread_, thread_name_));
+    RexSwitchSetCurrentThreadPriority(
+        SwitchPriorityFor(guest_thread_, thread_name_, creation_params_.start_address));
 #endif
     runtime::ThreadState::Bind(thread_state_.get());
 

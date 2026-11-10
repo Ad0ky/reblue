@@ -134,6 +134,11 @@ private:
   std::deque<std::shared_ptr<Picture>> ready_; // display order
   std::deque<std::shared_ptr<const Picture>> recent_; // last handed out
   void Remember(std::shared_ptr<const Picture> picture); // mutex_ held
+  std::shared_ptr<const Picture> Find(std::unique_lock<std::mutex> &lock,
+                                      u64 index, int waitMs);
+  std::shared_ptr<const Picture> Forward(std::shared_ptr<const Picture> picture);
+  std::shared_ptr<const Picture> newest_; // latest in display order shown
+  u64 backward_ = 0;
   u64 maxDecoded_ = 0;   // highest stream index put in ready_
   bool decodedAny_ = false;
   std::vector<std::string> appended_;

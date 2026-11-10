@@ -203,11 +203,11 @@ void LogEnd(const Session &s, const char *why) {
   const std::string error = s.video->LastError();
   BD_INFO("native movie: {} {} ({}): {} pictures from the game, {} frames "
           "shown from FFmpeg, {} not ready, {} unknown buffers; FFmpeg decoded "
-          "{} ({:.0f} fps of decoding){}{}",
+          "{} ({:.0f} fps of decoding); queue: {}{}{}",
           s.Label(), why, ToString(s.state), s.pictures, s.shown, s.missing,
           s.unknown, stats.decoded,
           stats.decodeSeconds > 0 ? stats.decoded / stats.decodeSeconds : 0.0,
-          error.empty() ? "" : ", error: ", error);
+          s.video->Describe(), error.empty() ? "" : ", error: ", error);
 }
 
 // Under g_mutex. Replaces any session there was.
