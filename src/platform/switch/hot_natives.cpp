@@ -15,6 +15,7 @@
  */
 #include "reblue_pch.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -226,6 +227,59 @@ static inline void reblue_stvrx(u8 *base, u32 ea, const u8 *v) {
       n_##name(ctx, base);                                                     \
     else                                                                       \
       __imp__##name(ctx, base);                                                \
+  }
+// The same, counting and timing the copy's calls; a line every 10 s:
+// calls per second, average and longest call, share of one core.
+struct HotTimer {
+  std::atomic<u64> calls{0}, ticks{0}, maxTicks{0}, windowStart{0};
+};
+static void HotTimeReport(HotTimer &t, const char *name, u64 now) {
+  u64 start = t.windowStart.load(std::memory_order_relaxed);
+  if (start == 0) {
+    t.windowStart.compare_exchange_strong(start, now);
+    return;
+  }
+  if (now - start < 10ull * 19200000ull)
+    return;
+  if (!t.windowStart.compare_exchange_strong(start, now))
+    return;
+  const u64 calls = t.calls.exchange(0), ticks = t.ticks.exchange(0),
+            longest = t.maxTicks.exchange(0);
+  const double seconds = double(now - start) / 19200000.0;
+  std::fprintf(stderr,
+               "[hot-time] %s: %.1f calls/s, %.1f us a call (longest %.1f), "
+               "%.0f%% of a core\n",
+               name, calls / seconds, calls ? ticks / 19.2 / calls : 0.0,
+               longest / 19.2, 100.0 * ticks / 19200000.0 / seconds);
+}
+#if defined(__aarch64__)
+// The system counter (armGetSystemTick), 19.2 MHz on the Switch.
+static inline u64 HotTicks() {
+  u64 t;
+  __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(t));
+  return t;
+}
+#else
+static inline u64 HotTicks() { return 0; }
+#endif
+#define REBLUE_HOT_TICKS() HotTicks()
+#define REBLUE_HOT_HOOK_TIMED(name, batch, index)                              \
+  extern "C" REX_FUNC(name) {                                                  \
+    static const bool on = NativeOn(#name, batch, index);                      \
+    static HotTimer timer;                                                     \
+    const u64 t0 = REBLUE_HOT_TICKS();                                         \
+    if (on) [[likely]]                                                         \
+      n_##name(ctx, base);                                                     \
+    else                                                                       \
+      __imp__##name(ctx, base);                                                \
+    const u64 t1 = REBLUE_HOT_TICKS();                                         \
+    const u64 d = t1 - t0;                                                     \
+    timer.calls.fetch_add(1, std::memory_order_relaxed);                       \
+    timer.ticks.fetch_add(d, std::memory_order_relaxed);                       \
+    u64 m = timer.maxTicks.load(std::memory_order_relaxed);                    \
+    while (d > m && !timer.maxTicks.compare_exchange_weak(m, d)) {             \
+    }                                                                          \
+    HotTimeReport(timer, #name, t1);                                           \
   }
 // A function a hook in the sources replaces: what that hook calls.
 #define REBLUE_HOT_CALLER(name)                                                \
