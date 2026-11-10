@@ -70,7 +70,7 @@ REXCVAR_DEFINE_INT32(switch_guest_sound_priority, 0x3A, "Kernel",
 // cutscenes, sharing the time slices with Main and Draw at 0x3B, and the
 // audio output found no data ~1350 times a run even with a 32-frame queue.
 // It waits for its next block between runs, as the sound thread does.
-REXCVAR_DEFINE_STRING(switch_guest_sound_entries, "8268A410", "Kernel",
+REXCVAR_DEFINE_STRING(switch_guest_sound_entries, "8268A410,8268A4D8", "Kernel",
                       "Switch: start addresses (hex, comma-separated) of "
                       "more guest threads that get "
                       "switch_guest_sound_priority. Empty = none.");

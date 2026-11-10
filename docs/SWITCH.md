@@ -421,3 +421,19 @@ counts those requests. Crackling unchanged with plain copies (effect thread
 still 88-94%): it shared the time slices with Main and Draw at 0x3B; its
 thread (entry 0x8268A410, `switch_guest_sound_entries`) now gets the sound
 thread's priority, 0x3A.
+
+Audio engine threads (`bd_audio_engine_threads`, default 2 on the Switch),
+2026-11-10. The `[hot-time]` line showed what the crackling after loading is:
+up to 1880 reverb calls a second (ten instances, 440 us each for a 5 ms
+block, ~1800 instructions a sample), 83% of a core, on a thread at 94% with a
+fourth of the CPU free. Two attempts to shorten the reverb's sample loop
+(frame and filter words kept in locals; pointers computed instead of
+reloaded) were exact but no shorter once compiled, and are not in the tree.
+The thread is the worker of the Xbox 360 XAudio2 library linked into the
+game, and that library is multi-threaded by design: one worker per hardware
+thread in its processor mask, all taking voices from the same per-stage
+queues (`sub_8268A7A0`, `sub_82689D88`, `sub_82689A00`); the game asks for
+one. `src/engine/audio_threads.cpp` adds a hardware thread to the mask where
+the library decodes it (`sub_82688DD8`), so its sizes and its thread
+creation agree; the second worker (entry `0x8268A4D8`) gets the sound
+priority too. `bd_audio_engine_threads = 0` is the game's own setting.
