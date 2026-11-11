@@ -1,9 +1,9 @@
 diff --git a/plume_deko3d.cpp b/plume_deko3d.cpp
 new file mode 100644
-index 0000000..5feb942
+index 0000000..ea03796
 --- /dev/null
 +++ b/plume_deko3d.cpp
-@@ -0,0 +1,2010 @@
+@@ -0,0 +1,2038 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): device, memory, resources, shaders and pipelines. The command lists,
 +// the queue and the swapchain are in plume_deko3d_commands.cpp. docs/deko3d-renderer.md is the design; the facts about
@@ -672,14 +672,18 @@ index 0000000..5feb942
 +        if (images) {
 +            imageCount = images;
 +            imageBlock = device->makeBlock(alignUp(images * 32, DK_MEMBLOCK_ALIGNMENT), DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, "image descriptors");
-+            if (imageBlock)
++            if (imageBlock) {
 +                memset(dkMemBlockGetCpuAddr(imageBlock), 0, images * 32);
++                imageShadow.assign(images, DkImageDescriptor{});
++            }
 +        }
 +        if (samplers) {
 +            samplerCount = samplers;
 +            samplerBlock = device->makeBlock(alignUp(samplers * 32, DK_MEMBLOCK_ALIGNMENT), DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, "sampler descriptors");
-+            if (samplerBlock)
++            if (samplerBlock) {
 +                memset(dkMemBlockGetCpuAddr(samplerBlock), 0, samplers * 32);
++                samplerShadow.assign(samplers, DkSamplerDescriptor{});
++            }
 +        }
 +        this->buffers.resize(buffers ? index : 0);
 +    }
@@ -724,8 +728,18 @@ index 0000000..5feb942
 +            return;
 +        DkImageDescriptor *d = static_cast<DkImageDescriptor *>(dkMemBlockGetCpuAddr(imageBlock)) + (descriptorIndex - imageFirst);
 +        const Deko3DTexture *t = static_cast<const Deko3DTexture *>(texture);
++        // re:Blue (2026-11-12): a slot written with the bytes it already holds changes nothing the GPU can read, so it
++        // does not advance the descriptor epoch (each advance invalidates the GPU's descriptor and shader caches before
++        // the next draw of every command list).
++        DkImageDescriptor &shadow = imageShadow[descriptorIndex - imageFirst];
++        bool same = false;
 +        if (t == nullptr || !t->valid) {
-+            memset(d, 0, sizeof(*d));
++            static const DkImageDescriptor zero{};
++            same = !memcmp(&shadow, &zero, sizeof(zero));
++            if (!same) {
++                memset(d, 0, sizeof(*d));
++                shadow = zero;
++            }
 +        }
 +        else {
 +            const Range *r = rangeOf(descriptorIndex);
@@ -735,7 +749,11 @@ index 0000000..5feb942
 +            // writes it, so a slot is written whole, with one copy.
 +            DkImageDescriptor local;
 +            dkImageDescriptorInitialize(&local, &view, loadStore, false);
-+            memcpy(d, &local, sizeof(local));
++            same = !memcmp(&shadow, &local, sizeof(local));
++            if (!same) {
++                memcpy(d, &local, sizeof(local));
++                shadow = local;
++            }
 +            // banjo-nx (2026-10-19, GPU, txq): the size a texture query of this view returns at level 0: the image's
 +            // size at the view's first level; the depth of a 3D image there, else the view's layers (all from its first
 +            // when it names no count). tools/deko3d_glsl_opt.py's txq verify (constant 908 = 2) checks it on the GPU.
@@ -753,6 +771,10 @@ index 0000000..5feb942
 +                                    : (t->desc.arraySize > view.layerOffset ? t->desc.arraySize - view.layerOffset : 1u);
 +            imageSizes[id] = {w, h, z};
 +        }
++        if (same) {
++            g_deko3dStats.descriptorSame++;
++            return;
++        }
 +        g_deko3dStats.descriptorWrites++;
 +        device->descriptorEpoch.fetch_add(1, std::memory_order_release);
 +    }
@@ -761,10 +783,16 @@ index 0000000..5feb942
 +        if (!samplerBlock || descriptorIndex < samplerFirst || descriptorIndex - samplerFirst >= samplerCount)
 +            return;
 +        DkSamplerDescriptor *d = static_cast<DkSamplerDescriptor *>(dkMemBlockGetCpuAddr(samplerBlock)) + (descriptorIndex - samplerFirst);
-+        if (sampler == nullptr)
-+            memset(d, 0, sizeof(*d));
-+        else
-+            memcpy(d, &static_cast<const Deko3DSampler *>(sampler)->descriptor, sizeof(*d));
++        // re:Blue (2026-11-12): unchanged bytes keep the epoch, as in setTexture.
++        static const DkSamplerDescriptor zero{};
++        const DkSamplerDescriptor *src = sampler ? &static_cast<const Deko3DSampler *>(sampler)->descriptor : &zero;
++        DkSamplerDescriptor &shadow = samplerShadow[descriptorIndex - samplerFirst];
++        if (!memcmp(&shadow, src, sizeof(*d))) {
++            g_deko3dStats.descriptorSame++;
++            return;
++        }
++        memcpy(d, src, sizeof(*d));
++        shadow = *src;
 +        g_deko3dStats.descriptorWrites++;
 +        device->descriptorEpoch.fetch_add(1, std::memory_order_release);
 +    }
@@ -2016,10 +2044,10 @@ index 0000000..5feb942
 +};
 diff --git a/plume_deko3d.h b/plume_deko3d.h
 new file mode 100644
-index 0000000..c18068c
+index 0000000..09edc28
 --- /dev/null
 +++ b/plume_deko3d.h
-@@ -0,0 +1,715 @@
+@@ -0,0 +1,722 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): plume's render interface on deko3d, the Switch's own GPU API, for
 +// Renut's renderer (docs/deko3d-renderer.md). MIT, as plume. deko3d is zlib (fincs, devkitPro); the shaders are compiled
@@ -2071,6 +2099,9 @@ index 0000000..c18068c
 +        std::atomic<uint64_t> shaderCompiles{0}, shaderCompileNs{0}, shaderCacheHits{0}, shaderCompileFailures{0};
 +        std::atomic<uint64_t> imageBytes{0}, bufferBytes{0}, codeBytes{0}, commandBytes{0};
 +        std::atomic<uint64_t> descriptorWrites{0}, pipelineBinds{0}, stateBinds{0}, draws{0};
++        // re:Blue (2026-11-12): descriptor writes that found the same bytes in the slot (no epoch advance), and the
++        // invalidations of the GPU's descriptor and shader caches the command lists recorded.
++        std::atomic<uint64_t> descriptorSame{0}, descriptorInvalidates{0};
 +        std::atomic<uint64_t> windowDraws{0}; // draws whose shaders read fetch data from memory (storage binding 15)
 +        // banjo-nx (2026-10-19): the barriers recorded, by what they wait for (DkBarrier_Primitives, _Fragments, _Full:
 +        // the 3D pipe drained, the copy engine as well), and those that invalidate the texture cache.
@@ -2234,6 +2265,10 @@ index 0000000..c18068c
 +        // banjo-nx (2026-10-19, GPU): per image id, the level-0 size of the view written there as a texture query
 +        // reads it (width, height, depth or layers), for the texture size buffer (txq).
 +        std::vector<std::array<uint32_t, 3>> imageSizes;
++        // re:Blue (2026-11-12): what each image and sampler slot holds, kept in cached memory (the blocks are CPU
++        // uncached) to find writes of the same bytes.
++        std::vector<DkImageDescriptor> imageShadow;
++        std::vector<DkSamplerDescriptor> samplerShadow;
 +
 +        Deko3DDescriptorSet(Deko3DDevice *device, const RenderDescriptorSetDesc &desc);
 +        ~Deko3DDescriptorSet() override;
@@ -2737,10 +2772,10 @@ index 0000000..c18068c
 +};
 diff --git a/plume_deko3d_commands.cpp b/plume_deko3d_commands.cpp
 new file mode 100644
-index 0000000..8cb5682
+index 0000000..2f211aa
 --- /dev/null
 +++ b/plume_deko3d_commands.cpp
-@@ -0,0 +1,1402 @@
+@@ -0,0 +1,1406 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): command lists, the queue and the swapchain (plume_deko3d.cpp has the
 +// device). docs/deko3d-renderer.md section 4 maps each plume call to deko3d.
@@ -2914,6 +2949,10 @@ index 0000000..8cb5682
 +        const uint64_t epoch = currentEpoch();
 +        if (epoch != descriptorEpoch) {
 +            flushBarriers();
++            {
++                Deko3DStats &st = GetDeko3DStats();
++                st.descriptorInvalidates.store(st.descriptorInvalidates.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
++            }
 +            dkCmdBufBarrier(cmd, DkBarrier_None, DkInvalidateFlags_Descriptors | DkInvalidateFlags_Shader);
 +            descriptorEpoch = epoch;
 +        }

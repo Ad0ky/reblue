@@ -445,3 +445,16 @@ and after a warp the colours were wrong and the field map crashed in
 `n_sub_8224C060` (a null source pointer reaching memcpy), although every copy
 had passed `localize_check.py`. Copying the long tail costs correctness for no
 measurable speed; the hot copies are the ones that pay.
+
+Slowest windows, 2026-11-12: in the castle street at 16-18 fps the GPU takes
+~60 ms a frame (46 ms in the 960x536 scene pass, ~4600 draws), so the GPU
+sets the frame time there; the Main Thread waits 32% of the time for the
+Draw Thread and 16% for a GPU fence in Present, which is why CPU-side copies
+changed nothing in those windows. plume's deko3d descriptor sets advanced the
+descriptor epoch on every `setTexture`/`setSampler`, even one writing the
+bytes the slot already held, and each advance makes the next draw of every
+command list invalidate the GPU's descriptor and shader caches. A write of
+the same bytes (compared with a cached copy of each slot; the descriptor
+blocks are CPU-uncached) no longer advances it. `[deko3d] descriptors per
+frame` reports the writes, the skipped same-byte writes and the
+invalidations recorded.
