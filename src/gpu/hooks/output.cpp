@@ -9,7 +9,6 @@
  * @license   BSD 3-Clause License
  *            See LICENSE file in the project root for full license text.
  */
-#include "cpu/hot_calls.h"
 #include "gpu/output.h"
 
 #include <algorithm>
@@ -438,7 +437,7 @@ void RenormalizeSizedQuads(u32 node, u32 out_w, u32 out_h) {
 //
 // Raw, on the inherited context: a typed REX_IMPORT re-roots the guest stack
 // at ThreadState's r1 and overwrites the frames live underneath it.
-REBLUE_HOT_DECLARE(bdRenderSubmitList)
+REX_EXTERN(__imp__bdRenderSubmitList);
 REX_HOOK_RAW(bdRenderSubmitList) {
   u32 w, h;
   auto *vw = bd::mem::at<be_f32>(kViewportWidthEA);
@@ -455,7 +454,7 @@ REX_HOOK_RAW(bdRenderSubmitList) {
   }
   if (pin)
     bd::gpu::rq::Run([] { bd::gpu::Video::SetDesignCanvasDrain(true); });
-  REBLUE_HOT_CALL(bdRenderSubmitList)(ctx, base);
+  __imp__bdRenderSubmitList(ctx, base);
   if (pin)
     bd::gpu::rq::Run([] { bd::gpu::Video::SetDesignCanvasDrain(false); });
   if (pin) {

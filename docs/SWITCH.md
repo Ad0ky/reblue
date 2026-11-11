@@ -438,15 +438,10 @@ the library decodes it (`sub_82688DD8`), so its sizes and its thread
 creation agree; the second worker (entry `0x8268A4D8`) gets the sound
 priority too. `bd_audio_engine_threads = 0` is the game's own setting.
 
-Seventh and eighth batches, 2026-11-11 (test1 at 540p, test2 at 432p: median
-27.9 fps, worst tenth 17.3; 432p only ~10% better in the worst windows, so the
-castle street is CPU-bound, Main at 86-100%). Every guest function the
-console profiles sampled that had no copy yet is now copied, as rr6-nx does:
-the seventh batch (plain) has those sampled only on Main and Draw, the eighth
-(volatile) those sampled on other threads too. Six hot functions that the
-sources hook (`bdFrameSubmitAndDebugHUD`, `bdAnimationUpdate`,
-`bdVisualObjectInitBones`, `bdParticleSystemSnapshot`,
-`bdSceneSubmitRenderList`, `bdRenderSubmitList`) moved to the
-`REBLUE_HOT_HOOKED` path, so their hooks call the copies; the other names the
-sources mention stay uncopied. `localize_check.py` (30 runs each on x86, the 31 hottest on AArch64 too) dropped 14 copies that differed or crashed; 1358 of 1377 functions copied. The PGO profile
-has to be made again after this: copies made after a profile have no counts.
+Seventh and eighth batches (every sampled function copied, 4d7deaf),
+2026-11-11: reverted. With a new PGO profile the castle street was no faster
+(16.4-18.2 fps, CPU 49-57 ms a frame, against 16.3-21.7 and 48-55 in test1),
+and after a warp the colours were wrong and the field map crashed in
+`n_sub_8224C060` (a null source pointer reaching memcpy), although every copy
+had passed `localize_check.py`. Copying the long tail costs correctness for no
+measurable speed; the hot copies are the ones that pay.
