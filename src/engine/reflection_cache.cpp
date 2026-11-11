@@ -8,6 +8,7 @@
  * @license   BSD 3-Clause License
  *            See LICENSE file in the project root for full license text.
  */
+#include "cpu/hot_calls.h"
 #include "engine/reflection_cache.h"
 
 #include <algorithm>
@@ -57,7 +58,7 @@ REXCVAR_DEFINE_DOUBLE(bd_reflection_min_pixels, 3.0, "Graphics",
 
 REX_EXTERN(__imp__sub_821875F8);
 REX_EXTERN(__imp__sub_821877C8);
-REX_EXTERN(__imp__bdSceneSubmitRenderList);
+REBLUE_HOT_DECLARE(bdSceneSubmitRenderList)
 REX_EXTERN(bdDestroySurface);
 REX_EXTERN(bdRenderTargetRelease);
 
@@ -167,7 +168,7 @@ REX_HOOK_RAW(bdSceneSubmitRenderList) {
     BD_CPU_ZONE("ReflectionReuse");
     return;
   }
-  __imp__bdSceneSubmitRenderList(ctx, base);
+  REBLUE_HOT_CALL(bdSceneSubmitRenderList)(ctx, base);
 }
 
 // The closing: without the resolve on a reused frame (the surface was cleared

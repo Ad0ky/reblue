@@ -1643,7 +1643,7 @@ REX_HOOK_RAW(issActor__Update) {
   g_evtWindowClosing = false;
 }
 
-REX_EXTERN(__imp__bdAnimationUpdate);
+REBLUE_HOT_DECLARE(bdAnimationUpdate)
 REX_HOOK_RAW(bdAnimationUpdate) {
   auto *vo = g_evtWindowClosing ? TryStruct<CharaAnim_t>(ctx.r3.u32) : nullptr;
   bool hold = false;
@@ -1665,7 +1665,7 @@ REX_HOOK_RAW(bdAnimationUpdate) {
     vo->cursor = length;
     vo->cursorRate = 0.0f;
   }
-  __imp__bdAnimationUpdate(ctx, base);
+  REBLUE_HOT_CALL(bdAnimationUpdate)(ctx, base);
   if (hold)
     vo->cursorRate = cursorRate;
 }
@@ -2241,13 +2241,13 @@ void bdParticleSpawnHook(PPCRegister &r31) {
     ++g_effHistory[r31.u32].spawned;
 }
 
-REX_EXTERN(__imp__bdParticleSystemSnapshot);
+REBLUE_HOT_DECLARE(bdParticleSystemSnapshot)
 REX_HOOK_RAW(bdParticleSystemSnapshot) {
   const u32 sysEA = ctx.r3.u32;
   const bool tick = bd::engine::TickDue();
   if (tick)
     RestoreEffParticles(sysEA);
-  __imp__bdParticleSystemSnapshot(ctx, base);
+  REBLUE_HOT_CALL(bdParticleSystemSnapshot)(ctx, base);
   if (!bd::engine::InterpolationActive()) {
     g_effHistory.clear();
     g_effEmitterMotion.clear();
@@ -3468,12 +3468,12 @@ REX_HOOK_RAW(bdCameraRender) {
     t_inCameraRender = false;
 }
 
-REX_EXTERN(__imp__bdFrameSubmitAndDebugHUD);
+REBLUE_HOT_DECLARE(bdFrameSubmitAndDebugHUD)
 REX_HOOK_RAW(bdFrameSubmitAndDebugHUD) {
   g_swapTickDue = g_drawTickDue;
   g_drawTickDue = bd::engine::TickDue();
   bd::engine::PublishRenderClock();
-  __imp__bdFrameSubmitAndDebugHUD(ctx, base);
+  REBLUE_HOT_CALL(bdFrameSubmitAndDebugHUD)(ctx, base);
 }
 
 REX_EXTERN(__imp__bdRenderStep);
@@ -3482,10 +3482,10 @@ REX_HOOK_RAW(bdRenderStep) {
   __imp__bdRenderStep(ctx, base);
 }
 
-REX_EXTERN(__imp__bdVisualObjectInitBones);
+REBLUE_HOT_DECLARE(bdVisualObjectInitBones)
 REX_HOOK_RAW(bdVisualObjectInitBones) {
   t_boneWriter = true;
-  __imp__bdVisualObjectInitBones(ctx, base);
+  REBLUE_HOT_CALL(bdVisualObjectInitBones)(ctx, base);
   t_boneWriter = false;
 }
 

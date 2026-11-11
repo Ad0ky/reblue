@@ -31,7 +31,13 @@
   X(D3DDevice_SetPixelShaderConstantFN)                                        \
   X(D3DDevice_SetVertexShaderConstantFN)                                        \
   X(bdDrawRecordListReplay)                                                    \
-  X(sub_8272EC00)
+  X(sub_8272EC00)                                                              \
+  X(bdFrameSubmitAndDebugHUD)                                                \
+  X(bdAnimationUpdate)                                                       \
+  X(bdVisualObjectInitBones)                                                 \
+  X(bdParticleSystemSnapshot)                                                \
+  X(bdSceneSubmitRenderList)                                                 \
+  X(bdRenderSubmitList)
 namespace bd::hot {
 #define REBLUE_HOT_DECLARE_ONE(name)                                           \
   void Call_##name(PPCContext &__restrict ctx, uint8_t *base);
