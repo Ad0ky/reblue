@@ -458,3 +458,14 @@ the same bytes (compared with a cached copy of each slot; the descriptor
 blocks are CPU-uncached) no longer advances it. `[deko3d] descriptors per
 frame` reports the writes, the skipped same-byte writes and the
 invalidations recorded.
+
+Ruled out for the castle street's GPU time (2026-11-12): descriptor
+invalidations (0-5 descriptor writes a frame), the in-place constants
+(`bd_deko3d_delta_constants = false`, a new block per draw: the same 61 ms at
+~4600 draws), mid-frame submits (one per frame), GPU-uncached buffers (all
+GPU-cached) and unused vertex outputs (the toon VS writes 10, its PS reads 7).
+The scene pass costs ~10 us a draw. banjo-nx's two barrier options are now
+settings, off by default: `bd_deko3d_merge_barriers`,
+`bd_deko3d_lean_barriers`. `bd_deko3d_diag` (bits, measuring only, the picture
+is wrong) takes GPU work out: 1 the draws, 2 the pixels (one-pixel scissor),
+4 the fragment barriers' waits.

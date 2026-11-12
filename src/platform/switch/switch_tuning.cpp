@@ -74,6 +74,22 @@ REXCVAR_DEFINE_BOOL(bd_deko3d_depth_compression, true, "Switch",
                     "deko3d: depth/stencil targets with hardware compression, "
                     "as colour targets already have: less memory traffic for "
                     "depth tests. Read at start.");
+REXCVAR_DEFINE_BOOL(bd_deko3d_merge_barriers, false, "Switch",
+                    "deko3d: barriers recorded one after another with no GPU "
+                    "work between them are sent as one (the strongest wait and "
+                    "every cache invalidation of them), right before the next "
+                    "command that does work: the same order, one drain instead "
+                    "of several. Read at start.");
+REXCVAR_DEFINE_BOOL(bd_deko3d_lean_barriers, false, "Switch",
+                    "deko3d: a texture about to be rendered to (not read) waits "
+                    "for the work before it but keeps the texture cache; the "
+                    "transition that reads it later still drops the cache. "
+                    "Read at start.");
+REXCVAR_DEFINE_INT32(bd_deko3d_diag, 0, "Switch",
+                     "deko3d GPU cost experiments, for measuring only: they "
+                     "change or break the picture. Bits: 1 draws not sent, 2 "
+                     "every scissor one pixel (no pixel work), 4 fragment "
+                     "barriers do not wait. 0 in play. Read at start.");
 #endif
 
 namespace bd::platform {
@@ -208,7 +224,15 @@ void ApplySwitchClocks() {
     options.uamFlags = static_cast<unsigned>(REXCVAR_GET(bd_deko3d_uam_flags));
     options.zcull = REXCVAR_GET(bd_deko3d_zcull);
     options.depthCompression = REXCVAR_GET(bd_deko3d_depth_compression);
+    options.mergeBarriers = REXCVAR_GET(bd_deko3d_merge_barriers);
+    options.leanBarriers = REXCVAR_GET(bd_deko3d_lean_barriers);
+    options.diag = static_cast<unsigned>(REXCVAR_GET(bd_deko3d_diag));
     plume::Deko3DSetOptions(options);
+    BD_INFO("Switch: deko3d barriers: merged {}, lean {}{}",
+            options.mergeBarriers ? "on" : "off", options.leanBarriers ? "on" : "off",
+            options.diag ? " | GPU COST EXPERIMENT " + std::to_string(options.diag) +
+                               " ON (bd_deko3d_diag): the picture is wrong"
+                         : std::string());
     // A shader whose compile does not end is written here (uam_stuck_*.glsl).
     static const std::string logs = (bd::AppRootFolder() / "logs").string();
     plume::Deko3DSetDumpFolder(logs.c_str());
