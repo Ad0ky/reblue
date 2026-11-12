@@ -58,6 +58,9 @@ constexpr uint32_t kBufferBytes = kBufferSamples * 2 * sizeof(s16);
 // audout wants page-aligned sample memory.
 constexpr uint32_t kBufferAllocBytes = (kBufferBytes + 0xFFF) & ~0xFFFu;
 
+// re:Blue (2026-11-12, from renut-nx): four-core mode (core/threading_switch.cpp).
+extern "C" bool RexSwitchMoveCurrentThreadToSystemCore(int priority);
+extern "C" void RexSwitchSampleCoreIdle(void);
 // Above guest threads (0x3B) so the device is never starved, like the audio
 // pump of MarathonRecomp-NX (0x2B).
 constexpr int kOutputThreadPriority = 0x2B;
@@ -368,12 +371,17 @@ void SwitchAudioSystem::PumpTick() {
 
 void SwitchAudioSystem::OutputThreadMain() {
   Output& output = *output_;
+  // re:Blue (2026-11-12, from renut-nx): on the system core when the process has it (four-core mode,
+  // core/threading_switch.h), above the Audio Worker there (Horizon does not preempt between equal priorities). It also
+  // samples that core's idle time for rex_perfil.log.
+  const bool on_system_core = RexSwitchMoveCurrentThreadToSystemCore(kOutputThreadPriority - 1);
   for (size_t i = 0; i < kBufferCount; ++i) {
     FillAndAppend(i);
   }
   const u64 interval = armNsToTicks(kPumpIntervalNs);
   u64 deadline = armGetSystemTick() + interval;
   while (output.running.load(std::memory_order_relaxed)) {
+    if (on_system_core) RexSwitchSampleCoreIdle();  // at most every 100 ms
     u64 timeout_ns = kWaitTimeoutNs;
     if (output.pump) {
       const u64 now = armGetSystemTick();

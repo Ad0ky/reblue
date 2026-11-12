@@ -23,8 +23,51 @@
 #include <errno.h>
 #include <sched.h>
 
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
+#include <string>
 #include <unordered_map>
+
+#include <sys/stat.h>  // mkdir (RexSwitchEnsureForwarderNpdm)
+
+#include <rex/cvar.h>
+
+// re:Blue (2026-11-12): four-core mode, from renut-nx / banjo-nx (NetherSX2_nx's, MIT, NaGaa95). See threading_switch.h.
+REXCVAR_DEFINE_INT32(switch_system_core, 1, "Kernel",
+                     "Switch: when the process is granted all four cores (a forwarder whose NPDM allows CPU 0-3): "
+                     "0 = leave core 3 to the system, 1 = the audio output thread, the Audio Worker and shader "
+                     "compiles (and what switch_system_core_xma / _mixer add) each pinned to core 3, every other "
+                     "thread on cores 0-2, 2 = as 1 and the other threads allowed on core 3 too. No effect with the "
+                     "usual three cores")
+    .range(0, 2)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(switch_system_core_xma, false, "Kernel",
+                    "Switch four-core mode: the XMA Decoder on the system core too")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(switch_system_core_mixer, 0, "Kernel",
+                     "Switch four-core mode: how many of the game's XAudio engine threads (switch_guest_sound_entries) "
+                     "go to the system core. 0 = none (the reverb can take most of a core, and the system keeps about "
+                     "half of core 3); watch 'system core 3: idle' in rex_perfil.log before raising it")
+    .range(0, 8)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(switch_system_core_mixer_priority, 0x2D, "Kernel",
+                     "Switch four-core mode: the XAudio engine threads' priority on the system core (0x2D: below the "
+                     "audio output and the Audio Worker, above the game threads' 0x3B)")
+    .range(0x2C, 0x3B)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(switch_system_core_compiles, true, "Kernel",
+                    "Switch four-core mode: the deko3d shader compile thread on the system core")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_STRING(switch_forwarder_program_id, "", "Kernel",
+                      "Switch: program id (16 hex digits) of the forwarder that starts the game. Under that id, or "
+                      "under the id Sphaira gives a forwarder of this NRO (found without this key), the game writes "
+                      "sdmc:/atmosphere/contents/<id>/exefs/main.npdm (an NPDM granting CPU 0-3, Atmosphere's ExeFS "
+                      "file replacement) when it is missing or different; the next launch gets all four cores. Under "
+                      "any other id nothing is written. \"off\": never")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace {
 
@@ -330,6 +373,210 @@ bool RexSwitchPinCurrentThreadToCore(int core) {
  * it about another thread, so each thread has to look at itself.
  */
 int RexSwitchCurrentCore(void) { return int(svcGetCurrentProcessorNumber()); }
+
+/*
+ * --- the system core (re:Blue 2026-11-12, from renut-nx / banjo-nx 2026-10-27; NetherSX2_nx's 4-core mode) ----
+ */
+namespace {
+std::atomic<int> g_sys_state{0};
+std::atomic<unsigned> g_process_mask{0x7};
+std::atomic<int> g_system_core{-1};
+std::atomic<int> g_system_mode{0};
+std::atomic<unsigned> g_strip_mask{0};
+std::mutex g_sys_mutex;
+
+void ReadSystemCore(bool with_cvar) {
+  u64 mask = 0;
+  if (R_FAILED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) || mask == 0) mask = 0x7;
+  mask &= 0xF;
+  const int top = __builtin_popcountll(mask) >= 4 ? 63 - __builtin_clzll(mask) : -1;
+  const int mode = top < 0 ? 0 : (with_cvar ? int(REXCVAR_GET(switch_system_core)) : 1);
+  g_process_mask.store(unsigned(mask), std::memory_order_relaxed);
+  g_system_mode.store(mode, std::memory_order_relaxed);
+  g_system_core.store(mode >= 1 ? top : -1, std::memory_order_relaxed);
+  g_strip_mask.store((top >= 0 && mode <= 1) ? (1u << top) : 0u, std::memory_order_relaxed);
+  g_sys_state.store(1, std::memory_order_release);
+}
+
+inline void EnsureSystemCore() {
+  if (g_sys_state.load(std::memory_order_acquire) == 0) {
+    std::lock_guard<std::mutex> lock(g_sys_mutex);
+    if (g_sys_state.load(std::memory_order_relaxed) == 0) ReadSystemCore(false);
+  }
+}
+
+#include "forwarder_npdm.inc"  // kForwarderNpdm (renut-nx tools/forwarder, NetherSX2_nx's hbl.json, 39-bit)
+std::string g_npdm_status = "not checked";
+
+struct IdleSample {
+  std::atomic<u64> idle{0}, at{0};
+};
+IdleSample g_idle[4];
+}  // namespace
+
+Result __real_svcSetThreadCoreMask(Handle handle, s32 preferred_core, u32 affinity_mask);
+Result __wrap_svcSetThreadCoreMask(Handle handle, s32 preferred_core, u32 affinity_mask) {
+  EnsureSystemCore();
+  const u32 strip = g_strip_mask.load(std::memory_order_relaxed);
+  // A mask of more than one core loses the system core; a request for the system core alone goes through.
+  if (strip != 0 && (affinity_mask & strip) != 0 && (affinity_mask & ~strip) != 0) {
+    affinity_mask &= ~strip;
+    if (preferred_core >= 0 && (strip & (1u << preferred_core)) != 0) preferred_core = -1;
+  }
+  return __real_svcSetThreadCoreMask(handle, preferred_core, affinity_mask);
+}
+
+int RexSwitchInitSystemCore(void) {
+  {
+    std::lock_guard<std::mutex> lock(g_sys_mutex);
+    ReadSystemCore(true);
+  }
+  const u32 strip = g_strip_mask.load(std::memory_order_relaxed);
+  if (strip != 0) {
+    s32 preferred = 0;
+    u64 mask = 0;
+    if (R_SUCCEEDED(svcGetThreadCoreMask(&preferred, &mask, CUR_THREAD_HANDLE)) && (mask & strip) != 0 &&
+        (mask & ~u64(strip)) != 0) {
+      svcSetThreadCoreMask(CUR_THREAD_HANDLE, -1, u32(mask));  // (the wrap takes the system core out)
+    }
+  }
+  return g_system_core.load(std::memory_order_relaxed);
+}
+
+unsigned RexSwitchProcessCoreMask(void) {
+  EnsureSystemCore();
+  return g_process_mask.load(std::memory_order_relaxed);
+}
+
+int RexSwitchSystemCore(void) {
+  EnsureSystemCore();
+  return g_system_core.load(std::memory_order_relaxed);
+}
+
+int RexSwitchSystemCoreMode(void) {
+  EnsureSystemCore();
+  return g_system_mode.load(std::memory_order_relaxed);
+}
+
+unsigned RexSwitchAppCoreMask(void) {
+  EnsureSystemCore();
+  return g_process_mask.load(std::memory_order_relaxed) & ~g_strip_mask.load(std::memory_order_relaxed);
+}
+
+bool RexSwitchMoveCurrentThreadToSystemCore(int priority) {
+  const int core = RexSwitchSystemCore();
+  if (core < 0) return false;
+  if (R_FAILED(svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, 1u << core))) return false;
+  if (priority >= 0) (void)RexSwitchSetCurrentThreadPriorityOk(priority);
+  return true;
+}
+
+void RexSwitchSampleCoreIdle(void) {
+  static std::atomic<u64> last_try{0};
+  const u64 now = armGetSystemTick();
+  if (now - last_try.load(std::memory_order_relaxed) < armNsToTicks(100000000ull)) return;  // 100 ms
+  last_try.store(now, std::memory_order_relaxed);
+  const int core = int(svcGetCurrentProcessorNumber());
+  if (core < 0 || core >= 4) return;
+  IdleSample& s = g_idle[core];
+  u64 idle = 0;
+  if (R_FAILED(svcGetInfo(&idle, InfoType_IdleTickCount, INVALID_HANDLE, u64(core)))) return;
+  s.idle.store(idle, std::memory_order_relaxed);
+  s.at.store(now, std::memory_order_release);
+}
+
+// Whether 'program' is the id Sphaira's "Install Forwarder" gives a forwarder of this NRO (sphaira source/owo.cpp):
+// the first 8 bytes of the SHA-256 of the NRO path written twice, as 05xxxxxxxxxxx000, or in its native-game mode
+// 01xxxxxxxxxxx000 with bit 12 clear; the path with "sdmc:" and without. A retail game's id never matches.
+extern "C" int __system_argc;
+extern "C" char** __system_argv;
+static bool SphairaForwarderOfThisNro(u64 program) {
+  if (__system_argc <= 0 || !__system_argv || !__system_argv[0] || !__system_argv[0][0]) return false;
+  const std::string path = __system_argv[0];
+  const std::string rooted = path.rfind("sdmc:", 0) == 0 ? path.substr(5) : path;
+  for (const std::string& p : {std::string("sdmc:") + rooted, rooted}) {
+    const std::string hashed = p + p;
+    u64 digest[4] = {};
+    sha256CalculateHash(digest, hashed.data(), hashed.size());
+    const u64 h = digest[0];
+    if (program == (0x0500000000000000ull | (h & 0x00FFFFFFFFFFF000ull)) ||
+        program == (0x0100000000000000ull | (h & 0x00FFFFFFFFFFE000ull)))
+      return true;
+  }
+  return false;
+}
+
+int RexSwitchEnsureForwarderNpdm(void) {
+  const std::string want_text = REXCVAR_GET(switch_forwarder_program_id);
+  if (want_text == "off") {
+    g_npdm_status = "off (switch_forwarder_program_id = \"off\")";
+    return 0;
+  }
+  const u64 want = want_text.empty() ? 0 : std::strtoull(want_text.c_str(), nullptr, 16);
+  u64 program = 0;
+  if (R_FAILED(svcGetInfo(&program, InfoType_ProgramId, CUR_PROCESS_HANDLE, 0)) ||
+      ((want == 0 || program != want) && !SphairaForwarderOfThisNro(program))) {
+    char text[160];
+    std::snprintf(text, sizeof(text), "not written: running as %016llX, not a forwarder of this NRO",
+                  (unsigned long long)program);
+    g_npdm_status = text;
+    return 0;
+  }
+  unsigned char npdm[sizeof(kForwarderNpdm)];
+  std::memcpy(npdm, kForwarderNpdm, sizeof(npdm));
+  std::memcpy(npdm + kForwarderNpdmAci0 + 0x10, &program, 8);
+  std::memcpy(npdm + kForwarderNpdmAcid + 0x210, &program, 8);
+  std::memcpy(npdm + kForwarderNpdmAcid + 0x218, &program, 8);
+  char dir[96], path[128], part[96];
+  std::snprintf(dir, sizeof(dir), "sdmc:/atmosphere/contents/%016llX/exefs", (unsigned long long)program);
+  std::snprintf(path, sizeof(path), "%s/main.npdm", dir);
+  if (FILE* f = std::fopen(path, "rb")) {
+    unsigned char have[sizeof(npdm) + 1];
+    const size_t n = std::fread(have, 1, sizeof(have), f);
+    std::fclose(f);
+    if (n == sizeof(npdm) && std::memcmp(have, npdm, sizeof(npdm)) == 0) {
+      g_npdm_status = std::string("in place: ") + path;
+      return 1;
+    }
+  }
+  for (const char* sub : {"sdmc:/atmosphere", "sdmc:/atmosphere/contents"}) mkdir(sub, 0777);
+  std::snprintf(part, sizeof(part), "sdmc:/atmosphere/contents/%016llX", (unsigned long long)program);
+  mkdir(part, 0777);
+  mkdir(dir, 0777);
+  FILE* f = std::fopen(path, "wb");
+  const bool ok = f && std::fwrite(npdm, 1, sizeof(npdm), f) == sizeof(npdm);
+  if (f) std::fclose(f);
+  g_npdm_status =
+      std::string(ok ? "written (start the game again for four cores): " : "could NOT be written: ") + path;
+  return ok ? 2 : -1;
+}
+
+bool RexSwitchSystemCoreXma(void) { return RexSwitchSystemCore() >= 0 && REXCVAR_GET(switch_system_core_xma); }
+int RexSwitchSystemCoreMixerThreads(void) {
+  return RexSwitchSystemCore() >= 0 ? int(REXCVAR_GET(switch_system_core_mixer)) : 0;
+}
+int RexSwitchSystemCoreMixerPriority(void) { return REXCVAR_GET(switch_system_core_mixer_priority); }
+bool RexSwitchSystemCoreCompiles(void) {
+  return RexSwitchSystemCore() >= 0 && REXCVAR_GET(switch_system_core_compiles);
+}
+
+void RexSwitchSystemCoreDescribe(char* out, size_t out_len) {
+  if (!out || !out_len) return;
+  std::snprintf(out, out_len,
+                "process cores 0x%X, system core %d (switch_system_core %d; game threads on 0x%X); forwarder NPDM %s",
+                RexSwitchProcessCoreMask(), RexSwitchSystemCore(), RexSwitchSystemCoreMode(), RexSwitchAppCoreMask(),
+                g_npdm_status.c_str());
+}
+
+bool RexSwitchCoreIdleSample(int core, unsigned long long* idle_ticks, unsigned long long* at_ticks) {
+  if (core < 0 || core >= 4) return false;
+  const IdleSample& s = g_idle[core];
+  const u64 at = s.at.load(std::memory_order_acquire);
+  if (at == 0) return false;
+  *idle_ticks = s.idle.load(std::memory_order_relaxed);
+  *at_ticks = at;
+  return true;
+}
 
 }  // extern "C"
 

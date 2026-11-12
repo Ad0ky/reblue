@@ -60,6 +60,11 @@
 
 // libnx's sbrk bounds: the malloc heap. Declared here, at file scope: inside the anonymous namespace GCC
 // gives them that namespace (the link looks for (anonymous namespace)::fake_heap_start).
+// re:Blue (2026-11-12): four-core mode (core/threading_switch.cpp).
+extern "C" int RexSwitchSystemCore(void);
+extern "C" int RexSwitchSystemCoreMode(void);
+extern "C" unsigned RexSwitchAppCoreMask(void);
+extern "C" bool RexSwitchCoreIdleSample(int core, unsigned long long* idle_ticks, unsigned long long* at_ticks);
 extern "C" char* fake_heap_start;
 extern "C" char* fake_heap_end;
 
@@ -444,6 +449,23 @@ void ReportImpl(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCoun
                                               : "sin probar"),
                 double(counters_now[20] - counters_last[20]) / seconds,
                 double(counters_now[19] - counters_last[19]) / seconds);
+  // re:Blue (2026-11-12, from renut-nx): the system core (four-core mode, core/threading_switch.h): how much of it
+  // nobody used over the interval (sampled by the audio output thread, which runs there).
+  {
+    const int system_core = RexSwitchSystemCore();
+    if (system_core >= 0) {
+      static unsigned long long last_idle = 0, last_at = 0;
+      unsigned long long idle = 0, at = 0;
+      if (RexSwitchCoreIdleSample(system_core, &idle, &at)) {
+        if (last_at != 0 && at > last_at)
+          std::fprintf(f, "     system core %d: idle %.1f%% (switch_system_core %d; game threads on 0x%X)\n",
+                       system_core, 100.0 * double(idle - last_idle) / double(at - last_at),
+                       RexSwitchSystemCoreMode(), RexSwitchAppCoreMask());
+        last_idle = idle;
+        last_at = at;
+      }
+    }
+  }
   // Work the game sends to the GPU, per presented frame. One screen is
   // 1280x720 = 921,600 pixels.
   const auto delta = [&](unsigned id) { return double(counters_now[id] - counters_last[id]); };

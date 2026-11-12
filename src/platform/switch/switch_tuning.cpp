@@ -39,6 +39,11 @@
 #include "core/app_root.h"
 #include "core/logging.h"
 
+// Four-core mode (SDK core/threading_switch.cpp).
+extern "C" int RexSwitchSystemCore(void);
+extern "C" bool RexSwitchSystemCoreCompiles(void);
+extern "C" void RexSwitchSystemCoreDescribe(char* out, size_t out_len);
+
 namespace plume {
 void VulkanSetPipelineCachePath(const std::string &path);
 }
@@ -203,6 +208,12 @@ void OpenDkshCache(const std::string &path, unsigned uam_flags) {
 #endif
 
 void ApplySwitchClocks() {
+  {
+    // Four-core mode (re:Blue 2026-11-12, from renut-nx; SDK core/threading_switch.h).
+    char cores[320];
+    RexSwitchSystemCoreDescribe(cores, sizeof(cores));
+    BD_INFO("Switch: {}", cores);
+  }
   const int mhz = REXCVAR_GET(bd_switch_gpu_mhz);
   RexSwitchApmPedirGpuMhz(mhz);
   RexSwitchApmPermitirRam1600(0);
@@ -229,6 +240,9 @@ void ApplySwitchClocks() {
     options.mergeBarriers = REXCVAR_GET(bd_deko3d_merge_barriers);
     options.leanBarriers = REXCVAR_GET(bd_deko3d_lean_barriers);
     options.diag = static_cast<unsigned>(REXCVAR_GET(bd_deko3d_diag));
+    // Four-core mode (from renut-nx): the uam compile thread on the system core when there is one.
+    if (RexSwitchSystemCoreCompiles())
+      options.compileCore = RexSwitchSystemCore();
     plume::Deko3DSetOptions(options);
     BD_INFO("Switch: deko3d barriers: merged {}, lean {}{}",
             options.mergeBarriers ? "on" : "off", options.leanBarriers ? "on" : "off",

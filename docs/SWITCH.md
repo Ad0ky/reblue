@@ -474,3 +474,33 @@ draw): merged + lean barriers took the fragment barriers from 80 to 46 a
 frame and the GPU time stayed 61.3 ms at ~4650 draws, so the barriers are not
 the cost. The diag experiments left the screen black, so they now run every
 other `[gpu-passes]` window (the line says which).
+
+## Four-core mode (2026-11-12, from renut-nx / banjo-nx, originally NetherSX2_nx)
+
+Ported from ChanseyIsTheBest's renut-nx base (`sdk/src/core/threading_switch.cpp`,
+`docs/four-core-mode.md`), which took it from NetherSX2_nx's 4-core support
+(NaGaa95, MIT). An application gets cores 0-2; a forwarder whose NPDM grants
+CPU ids 0-3 gets all four. The game then keeps cores 0-2 for its own threads
+and puts background threads on core 3, each pinned there alone:
+
+- the audio output thread (0x2A) and the Audio Worker (0x2B); the XMA Decoder
+  with `switch_system_core_xma`;
+- the first `switch_system_core_mixer` of the game's XAudio engine threads
+  (`switch_guest_sound_entries`) at `switch_system_core_mixer_priority`
+  (0x2D). Default 0: the reverb can take most of a core and the system keeps
+  about half of core 3 (renut-nx's first run stuttered with core 3 full);
+- the deko3d shader compile thread (`switch_system_core_compiles`).
+
+`__wrap_svcSetThreadCoreMask` takes core 3 out of every mask of more than one
+core, so libnx's new threads (which get the process's whole mask) stay on
+0-2. `switch_system_core` 0 turns it off, 2 also lets the game's threads onto
+core 3.
+
+Getting the cores: the game writes the four-core NPDM (renut-nx's
+`tools/forwarder`, NetherSX2_nx's `hbl.json` with a 39-bit address space) to
+`sdmc:/atmosphere/contents/<id>/exefs/main.npdm` when it runs under a Sphaira
+forwarder of its own NRO (the id Sphaira derives from the NRO's path) or
+under `switch_forwarder_program_id`; Atmosphere's ExeFS replacement applies
+it at the next launch. Under any other id (title takeover) nothing is
+written. The log's `Switch: process cores ...` line says what happened;
+`rex_perfil.log` shows `system core 3: idle N%` every 10 s.

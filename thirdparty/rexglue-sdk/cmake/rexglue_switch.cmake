@@ -91,7 +91,7 @@ if(NOT TARGET rexglue_switch_startup)
         "LINKER:--wrap=nvFenceWait,--wrap=nvGpuChannelKickoff,--wrap=nvMapCreate"
         "LINKER:--wrap=nvAddressSpaceAllocFixed,--wrap=nvioctlNvhostAsGpu_MapBufferEx"
         "LINKER:--wrap=armDCacheClean,--wrap=nwindowQueueBuffer,--wrap=bqDequeueBuffer"
-        "LINKER:--wrap=svcSleepThread"
+        "LINKER:--wrap=svcSleepThread,--wrap=svcSetThreadCoreMask"
         "LINKER:--wrap=fsFsOpenFile,--wrap=fsFileClose,--wrap=fsFsOpenDirectory,--wrap=fsDirClose")
 endif()
 

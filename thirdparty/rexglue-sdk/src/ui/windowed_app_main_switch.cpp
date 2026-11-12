@@ -22,6 +22,8 @@
 // Only the syscall header: switch.h drags typedefs that collide with rex.
 extern "C" {
 #include <switch/types.h>
+
+extern "C" int RexSwitchInitSystemCore(void);  // core/threading_switch.h (four-core mode)
 // libnx runtime internals used for the exit below.
 extern u32 __nx_applet_exit_mode;
 NX_NORETURN void __libnx_exit(int rc);
@@ -61,6 +63,9 @@ int main(int argc, char* argv[]) {
   auto remaining = rex::cvar::Init(argc, argv);
   rex::cvar::ApplyEnvironment();
   rex::InitLoggingEarly();
+  // re:Blue (2026-11-12, from renut-nx): four-core mode (core/threading_switch.h), once the cvars are read and before
+  // any thread of ours starts; the main thread leaves the system core. Read again after the toml (rex_app.cpp).
+  RexSwitchInitSystemCore();
 
   int result;
   {

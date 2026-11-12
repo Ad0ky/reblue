@@ -241,7 +241,8 @@ void XThread::set_name(const std::string_view name) {
     // The game names its threads once they run (SetThreadName), after the
     // start set the guest priority.
     if (guest_thread_ && IsGuestSoundThread(name, creation_params_.start_address))
-      thread_->set_priority(REXCVAR_GET(switch_guest_sound_priority));
+      thread_->set_priority(on_system_core_ ? RexSwitchSystemCoreMixerPriority()
+                                            : REXCVAR_GET(switch_guest_sound_priority));
 #endif
   }
 }
@@ -529,6 +530,20 @@ X_STATUS XThread::Create() {
 #if REX_PLATFORM_SWITCH
     RexSwitchSetCurrentThreadPriority(
         SwitchPriorityFor(guest_thread_, thread_name_, creation_params_.start_address));
+    // re:Blue (2026-11-12, from renut-nx): with four cores granted, background threads go to the system core
+    // (core/threading_switch.h): the Audio Worker (and the XMA Decoder with switch_system_core_xma) at the audio
+    // priority, and the first switch_system_core_mixer of the game's XAudio engine threads
+    // (switch_guest_sound_entries) at switch_system_core_mixer_priority. Affinity calls from the game do not move
+    // them back: with fewer than six cores SetActiveCpu sets no host affinity.
+    if (!guest_thread_) {
+      const std::string_view n(thread_name_);
+      if (n.starts_with("Audio Worker") || (n.starts_with("XMA Decoder") && RexSwitchSystemCoreXma()))
+        on_system_core_ = RexSwitchMoveCurrentThreadToSystemCore(REX_SWITCH_PRIO_AUDIO);
+    } else if (IsGuestSoundEntry(creation_params_.start_address)) {
+      static std::atomic<int> moved{0};
+      if (moved.fetch_add(1) < RexSwitchSystemCoreMixerThreads())
+        on_system_core_ = RexSwitchMoveCurrentThreadToSystemCore(RexSwitchSystemCoreMixerPriority());
+    }
 #endif
     runtime::ThreadState::Bind(thread_state_.get());
 

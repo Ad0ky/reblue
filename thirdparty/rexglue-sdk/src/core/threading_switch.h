@@ -170,6 +170,43 @@ bool RexSwitchPinCurrentThreadToCore(int core);
 int RexSwitchCurrentCore(void);
 
 #ifdef __cplusplus
+
+/*
+ * --- the system core (four-core mode) -------------------------------------------------------------------
+ *
+ * re:Blue (2026-11-12), from renut-nx / banjo-nx (2026-10-27), which ported it from NetherSX2_nx's 4-core mode (MIT,
+ * NaGaa95: source/pthr.c core_init_once / pthr_pin_bg_core, launcher/fwd/main.c restoreMainThreadAffinity). An
+ * application gets cores 0-2 (InfoType_CoreMask 0x7); core 3 belongs to the system. A forwarder whose NPDM grants CPU
+ * ids 0-3 gives the process all four (0xF). Then the top core is kept for background work (the audio output thread,
+ * the Audio Worker, optionally the XMA Decoder and the XAudio mixer threads, shader compiles), each pinned there alone
+ * with its own priority, and every other thread stays on the first three: libnx's pthread_create gives each new thread
+ * the process's whole mask, which __wrap_svcSetThreadCoreMask narrows. switch_system_core: 0 never use it, 1
+ * background threads on it (default), 2 as 1 and every other thread allowed there too. With 3 cores every call here
+ * is a no-op (RexSwitchSystemCore() is -1).
+ */
+int RexSwitchInitSystemCore(void);
+unsigned RexSwitchProcessCoreMask(void);
+int RexSwitchSystemCore(void);
+int RexSwitchSystemCoreMode(void);
+unsigned RexSwitchAppCoreMask(void);
+/* Pins the calling thread to the system core alone and, if priority >= 0, sets its priority. False without one. */
+bool RexSwitchMoveCurrentThreadToSystemCore(int priority);
+/* Under the forwarder (switch_forwarder_program_id, or a Sphaira forwarder of this NRO), writes the four-core NPDM to
+ * sdmc:/atmosphere/contents/<id>/exefs/main.npdm when missing or different (it takes effect at the next launch).
+ * 0 nothing to do, 1 already in place, 2 written, -1 failed. */
+int RexSwitchEnsureForwarderNpdm(void);
+bool RexSwitchSystemCoreXma(void);
+/* How many of the game's XAudio engine threads go to the system core (switch_system_core_mixer), and their priority. */
+int RexSwitchSystemCoreMixerThreads(void);
+int RexSwitchSystemCoreMixerPriority(void);
+/* Whether shader compiles go to the system core (switch_system_core_compiles and a system core). */
+bool RexSwitchSystemCoreCompiles(void);
+void RexSwitchSystemCoreDescribe(char* out, size_t out_len);
+/* Records the idle ticks of the calling thread's core (only a thread on that core can read them; at most every
+ * 100 ms). The audio output thread calls it on the system core. */
+void RexSwitchSampleCoreIdle(void);
+bool RexSwitchCoreIdleSample(int core, unsigned long long* idle_ticks, unsigned long long* at_ticks);
+
 }
 #endif
 

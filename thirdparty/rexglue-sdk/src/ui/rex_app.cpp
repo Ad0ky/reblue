@@ -53,6 +53,10 @@ extern "C" {
 #include <switch/types.h>
 // libnx runtime internals used by the Switch exit in OnClosing.
 extern u32 __nx_applet_exit_mode;
+// re:Blue (2026-11-12, from renut-nx): four-core mode (core/threading_switch.h).
+int RexSwitchInitSystemCore(void);
+int RexSwitchEnsureForwarderNpdm(void);
+void RexSwitchSystemCoreDescribe(char* out, size_t out_len);
 NX_NORETURN void __libnx_exit(int rc);
 }
 #endif
@@ -174,6 +178,12 @@ bool ReXApp::SetupEnvironment() {
   // Load config FIRST so log cvars have final values
   if (std::filesystem::exists(config_path_))
     rex::cvar::LoadConfig(config_path_);
+#if REX_PLATFORM_SWITCH
+  // re:Blue (2026-11-12, from renut-nx): the four-core mode's keys as the toml sets them (main read them before the
+  // toml: the command line's and the defaults), and the forwarder's NPDM.
+  RexSwitchInitSystemCore();
+  RexSwitchEnsureForwarderNpdm();
+#endif
 
   std::string log_level_str = REXCVAR_GET(log_level);
   if (REXCVAR_GET(log_verbose) && log_level_str == "info")

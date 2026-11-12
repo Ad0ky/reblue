@@ -418,6 +418,8 @@ class XThread : public XObject {
   uint32_t stack_limit_ = 0;       // Low address
   bool guest_thread_ = false;
   bool main_thread_ = false;  // Entry-point thread
+  // re:Blue (2026-11-12): moved to the system core (four-core mode), with its priority there.
+  bool on_system_core_ = false;
   // Atomic: written by the thread itself in Exit/Terminate, read cross-thread by
   // KernelState::TerminateTitle's cooperative drain.
   std::atomic<bool> running_{false};
