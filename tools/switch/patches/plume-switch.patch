@@ -1,9 +1,9 @@
 diff --git a/plume_deko3d.cpp b/plume_deko3d.cpp
 new file mode 100644
-index 0000000..ea03796
+index 0000000..bae773d
 --- /dev/null
 +++ b/plume_deko3d.cpp
-@@ -0,0 +1,2038 @@
+@@ -0,0 +1,2058 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): device, memory, resources, shaders and pipelines. The command lists,
 +// the queue and the swapchain are in plume_deko3d_commands.cpp. docs/deko3d-renderer.md is the design; the facts about
@@ -1529,6 +1529,26 @@ index 0000000..ea03796
 +            source += defines;
 +            source.append(shader->glsl, nl + 1, std::string::npos);
 +        }
++        // re:Blue (2026-11-12): diag experiment 32 (a whole run, not alternating windows): every relative read of the
++        // vertex constants ("VertexShaderConstants.<array>[min(<index>, <last>)]", the bone rows of skinning) reads
++        // element 0, so the vertices of a warp all read the same constant address. Measures what the divergent
++        // constant reads cost; the skinned models collapse. The text differs, so the variant compiles anew.
++        bool patched = false;
++        if (g_deko3dOptions.diag & 32) {
++            const std::string open = "[min(";
++            size_t at = 0;
++            while ((at = source.find(open, at)) != std::string::npos) {
++                const size_t name = source.rfind("VertexShaderConstants.", at);
++                const size_t close = source.find(")]", at);
++                if (name == std::string::npos || close == std::string::npos || source.find_first_of(";\n", name) < at) {
++                    at += open.size();
++                    continue;
++                }
++                source.replace(at, close + 2 - at, "[0]");
++                patched = true;
++                at += 3;
++            }
++        }
 +        const uint64_t key = fnv1a64(source.data(), source.size());
 +        Deko3DShaderVariant *variant = nullptr;
 +        {
@@ -1547,7 +1567,7 @@ index 0000000..ea03796
 +        if (variant == nullptr) {
 +            std::vector<uint8_t> dksh;
 +            bool have = false;
-+            if (defines.empty() && !shader->defaultDksh.empty()) {
++            if (defines.empty() && !patched && !shader->defaultDksh.empty()) {
 +                dksh = shader->defaultDksh;
 +                have = true;
 +            }
@@ -2044,10 +2064,10 @@ index 0000000..ea03796
 +};
 diff --git a/plume_deko3d.h b/plume_deko3d.h
 new file mode 100644
-index 0000000..6f559b6
+index 0000000..4668964
 --- /dev/null
 +++ b/plume_deko3d.h
-@@ -0,0 +1,733 @@
+@@ -0,0 +1,734 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): plume's render interface on deko3d, the Switch's own GPU API, for
 +// Renut's renderer (docs/deko3d-renderer.md). MIT, as plume. deko3d is zlib (fincs, devkitPro); the shaders are compiled
@@ -2768,7 +2788,8 @@ index 0000000..6f559b6
 +        // 1 the draws are not sent (their state still is), 2 every scissor is one pixel (no pixel work), 4 fragment
 +        // barriers do not wait (their cache invalidations stay), 8 every draw is cut to one primitive (3 vertices
 +        // or indices, one instance): what is left is the cost of a draw as such, 16 every vertex buffer has stride 0
-+        // (the vertex shaders run, the vertex data reads and the triangles go).
++        // (the vertex shaders run, the vertex data reads and the triangles go), 32 (whole run) every relative read of
++        // the vertex constants (skinning's bone rows) reads element 0.
 +        unsigned diag = 0;
 +        // Whether the experiments are on now: the renderer turns them on and off every other report window, so the
 +        // screen shows between the measured windows and one run gives both numbers.

@@ -570,3 +570,15 @@ the Main Thread at 67-73% (69-73%), core 3 at least 55% idle, but the same
 16.6-18.4 fps: the GPU takes 54-60 ms a frame there. Experiment 16 (vertex
 buffers at stride 0) tells the vertex shaders from the vertex data reads and
 the triangles.
+
+Experiment 16 (2026-11-12, castle street): GPU 20-29 ms a frame against
+54-61 off, scene pass 13-22 against 37-47: with experiment 2, roughly 19 ms
+of pixel work, 13 ms of vertex reads and triangles and 13 ms of vertex
+shading in the scene pass. Per shader (the 2026-11-06 crowd profile) the toon
+draws spend ~48 ns a vertex, the shadow map's ~13. The toon vertex shaders
+(PC uam, flags 431): `bd_toon_vs_norm` 282 instructions (96 MOV), the skinned
+`bd_toon_vs_env` 725 (50 LDC: 19 bone rows read as
+`mix(0, exMatrix[min(i, 195)], i < 196)`, with 14 SSY/SYNC pairs). With the
+bone reads at element 0 it is 598 and has no LDC or SYNC. Experiment 32 (a
+whole run) does that in every vertex shader at its compile, to measure what
+the divergent constant reads cost on the console.
