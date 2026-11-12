@@ -22,6 +22,15 @@ void ApplySwitchClocks();
 // 0. The swapchain stays at the display size and the frame is scaled to it.
 bool SwitchHandheldRenderSize(u32 &w, u32 &h);
 
+// Dynamic resolution (bd_switch_dynamic_resolution, handheld only): fed each
+// frame's measured GPU time; true when the handheld render size it wants
+// changed, for the caller to apply (gpu::Output::Recompute, then the game's
+// render targets are rebuilt at the next frame submit).
+bool SwitchDynamicResolutionFrame(double gpu_ms);
+// Whether the present pass upscales with FSR 1 (bd_switch_fsr) for an image of
+// src_w x src_h shown at dst_w x dst_h.
+bool SwitchFsrWanted(u32 src_w, u32 src_h, u32 dst_w, u32 dst_h);
+
 // For a host worker thread (the movie decoder): lets the calling thread run
 // on every core of the process, starting on 'core'. A thread made with
 // std::thread on Horizon is otherwise confined to the core it was created on.
@@ -31,6 +40,8 @@ void SetCurrentThreadPriority(int priority);
 #else
 inline void ApplySwitchClocks() {}
 inline bool SwitchHandheldRenderSize(u32 &, u32 &) { return false; }
+inline bool SwitchDynamicResolutionFrame(double) { return false; }
+inline bool SwitchFsrWanted(u32, u32, u32, u32) { return false; }
 inline void SpreadCurrentThread(int) {}
 inline void SetCurrentThreadPriority(int) {}
 #endif

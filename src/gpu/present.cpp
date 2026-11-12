@@ -30,6 +30,7 @@
 #include "engine/frame_clock.h"
 #include "gpu/constant_buffers.h"
 #include "gpu/device.h"
+#include "platform/switch_tuning.h"
 #include "gpu/output.h"
 #include "gpu/pass_timer.h"
 #include "gpu/render_queue.h"
@@ -344,14 +345,21 @@ void RecordPresentPass(VideoState &s, GuestTexture *rt,
                         off_y + static_cast<i32>(fit_h)));
   constexpr float kPresentGamma = 1.0f;
   constexpr float kPresentDisplayCorrection = 1.0f;
-  s.command_list->setPipeline(s.gamma_correction_pipeline.get());
+  // FSR 1 (fsr_easu_ps.hlsl) when the image is smaller than its viewport and
+  // bd_switch_fsr wants it; its second "index" is the viewport's size.
+  const bool fsr = s.fsr_easu_pipeline &&
+                   bd::platform::SwitchFsrWanted(rt->width, rt->height, fit_w,
+                                                 fit_h) &&
+                   fit_w < 65536 && fit_h < 65536;
+  s.command_list->setPipeline(fsr ? s.fsr_easu_pipeline.get()
+                                  : s.gamma_correction_pipeline.get());
   struct PresentPushConstants {
     u32 descriptor_index;
     u32 descriptor_index_2;
     float gamma;
     float display_correction;
-  } pc{gamma_src_desc, 0, s.guest_gamma * kPresentGamma,
-       kPresentDisplayCorrection};
+  } pc{gamma_src_desc, fsr ? (fit_w | (fit_h << 16)) : 0u,
+       s.guest_gamma * kPresentGamma, kPresentDisplayCorrection};
   s.command_list->setGraphicsPushConstants(kCopyPushConstantRangeIndex, &pc,
                                            kCopyPushConstantByteOffset,
                                            sizeof(pc));

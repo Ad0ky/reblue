@@ -584,3 +584,31 @@ that in every vertex shader (each pipeline gets both vertex shaders, the
 changed one bound in the windows the experiment is on; the first version
 changed the whole run and the game could not be played to the castle
 street), to measure what the divergent constant reads cost on the console.
+
+Experiment 32 (2026-11-12, castle street, every other window): GPU 59.8 and
+59.5 ms a frame with the bone reads at element 0, 58.9 without, ~4600 draws
+each: the divergent bone reads are not the vertex cost.
+
+## Dynamic resolution with FSR 1 (2026-11-12, opt-in)
+
+`bd_switch_dynamic_resolution = true` (handheld only): the render height moves
+between `bd_switch_dynamic_low_height` (432) and `bd_switch_handheld_height`
+(540) in steps of 36 lines (540, 504, 468, 432; the 16:9 widths stay whole).
+The pass timer gives each frame's GPU time (needs `bd_gpu_profile` >= 1, the
+default); a moving average over `bd_switch_dynamic_gpu_ms` (33.3) for a second
+steps down, the next step up predicted (the GPU time scaled by the pixel
+ratio) under 95% of it for 2 s steps up, and changes are at least 2 s apart.
+The new size goes through `Output::Recompute`, and the game's render targets
+are rebuilt in `bdCreateRenderTargetTextures`, which the game calls every
+frame from `bdFrameSubmitAndDebugHUD`: the path a window resize takes on the
+PC, not used live on the Switch before. `bd_switch_dynamic_test_s = N`
+alternates the two ends every N seconds whatever the load, to test that path.
+The log says `[dynres] render height A -> B`.
+
+The present pass scales with AMD FidelityFX Super Resolution 1's EASU
+(`fsr_easu_ps.hlsl`, ported from ffx_fsr1.h 1.0.2, MIT) instead of bilinear
+filtering when `bd_switch_fsr` says so: 0 never, 1 while dynamic resolution
+is on (default), 2 whenever the image is smaller than the screen. On the PC
+uam it compiles to 557 instructions and 66 registers (12 TLD4), against 90 for
+the bilinear present: an estimated 3-4 ms a frame at 1280x720 on the
+console, to be measured (the `present` row of `[gpu-passes]`).

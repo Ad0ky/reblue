@@ -23,7 +23,9 @@
 
 #include "core/logging.h"
 #include "gpu/device.h"
+#include "gpu/output.h"
 #include "gpu/resources.h"
+#include "platform/switch_tuning.h"
 #include "gpu/shaders/shader_cache.h"
 
 namespace bd::gpu::pass_timer {
@@ -742,6 +744,10 @@ void Collect(u32 slot_index) {
     ++t.passes;
   }
   const double frame_ns = double(end - start);
+  // Dynamic resolution (bd_switch_dynamic_resolution): the frame's GPU time;
+  // a new handheld height is applied at the next frame submit.
+  if (bd::platform::SwitchDynamicResolutionFrame(frame_ns / 1e6))
+    Output::Recompute();
   g_frame_ns += frame_ns;
   g_worst_frame_ns = std::max(g_worst_frame_ns, frame_ns);
   ++g_frames;

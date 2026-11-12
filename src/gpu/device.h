@@ -364,6 +364,9 @@ struct VideoState {
   std::unique_ptr<plume::RenderPipeline> copy_color_pipeline;
   std::unique_ptr<plume::RenderPipeline> gamma_correction_pipeline;
   std::unique_ptr<plume::RenderShader> gamma_correction_ps;
+  // The present pass with FSR 1's EASU upscaler (fsr_easu_ps.hlsl, bd_switch_fsr); null when it could not be made.
+  std::unique_ptr<plume::RenderPipeline> fsr_easu_pipeline;
+  std::unique_ptr<plume::RenderShader> fsr_easu_ps;
   // Exponent of the guest's scanout gamma ramp, captured by the
   // bdBuildGammaRampLUT hook: BD uploads ramp(x) = x^((2-sub)*mul/2) via
   // SetGammaRamp, default settings give x^0.5. Applied at present.

@@ -26,6 +26,7 @@
 #include "src/gpu/shaders/hlsl/copy_depth_ps.hlsl.dxil.h"
 #include "src/gpu/shaders/hlsl/copy_vs.hlsl.dxil.h"
 #include "src/gpu/shaders/hlsl/gamma_correction_ps.hlsl.dxil.h"
+#include "src/gpu/shaders/hlsl/fsr_easu_ps.hlsl.dxil.h"
 #include "src/gpu/shaders/hlsl/pfx_occlusion_count_ps.hlsl.dxil.h"
 #include "src/gpu/shaders/hlsl/resolve_msaa_color_2x.hlsl.dxil.h"
 #include "src/gpu/shaders/hlsl/resolve_msaa_color_4x.hlsl.dxil.h"
@@ -38,6 +39,7 @@
 #include "src/gpu/shaders/hlsl/copy_depth_ps.hlsl.spirv.h"
 #include "src/gpu/shaders/hlsl/copy_vs.hlsl.spirv.h"
 #include "src/gpu/shaders/hlsl/gamma_correction_ps.hlsl.spirv.h"
+#include "src/gpu/shaders/hlsl/fsr_easu_ps.hlsl.spirv.h"
 #include "src/gpu/shaders/hlsl/pfx_occlusion_count_ps.hlsl.spirv.h"
 #include "src/gpu/shaders/hlsl/resolve_msaa_color_2x.hlsl.spirv.h"
 #include "src/gpu/shaders/hlsl/resolve_msaa_color_4x.hlsl.spirv.h"
@@ -295,6 +297,17 @@ bool BuildCopyPipeline(VideoState &s) {
     BD_ERROR("Plume createGraphicsPipeline for gamma_correction failed");
     return false;
   }
+
+  // The same pass with FSR 1's EASU upscaler (bd_switch_fsr). Optional: without
+  // it the present samples bilinearly as before.
+  s.fsr_easu_ps = REBLUE_CREATE_HOST_SHADER(s.device, fsr_easu_ps);
+  if (s.fsr_easu_ps) {
+    pipe_desc.pixelShader = s.fsr_easu_ps.get();
+    s.fsr_easu_pipeline =
+        CreateHostGraphicsPipeline(s.device.get(), pipe_desc, "fsr-easu");
+  }
+  if (!s.fsr_easu_pipeline)
+    BD_WARN("FSR 1 present pass not available: the image is scaled bilinearly");
 
   // Depth resolve PSOs are built lazily per dst depth format by
   // GetOrCreateCopyDepthPipeline: D3D12 requires the PSO depthStencilFormat to

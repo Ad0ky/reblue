@@ -35,7 +35,8 @@ import spv_to_dk_glsl  # noqa: E402
 
 # cmake/generated.cmake's host shaders: (stem, profile, extra dxc arguments)
 HOST_SHADERS = [(s, 'vs_6_0', []) for s in ('copy_vs', 'bd_2d_blit_vs', 'imgui_vs')] + \
-    [(s, 'ps_6_0', []) for s in ('copy_color_ps', 'copy_depth_ps', 'gamma_correction_ps', 'pfx_occlusion_count_ps',
+    [(s, 'ps_6_0', []) for s in ('copy_color_ps', 'copy_depth_ps', 'gamma_correction_ps', 'fsr_easu_ps',
+                                 'pfx_occlusion_count_ps',
                                  'bd_2d_blit_ps', 'imgui_ps', 'resolve_msaa_color_2x', 'resolve_msaa_color_4x',
                                  'resolve_msaa_color_8x', 'resolve_msaa_depth_2x', 'resolve_msaa_depth_4x',
                                  'resolve_msaa_depth_8x')] + \

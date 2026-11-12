@@ -22,6 +22,9 @@
 #include <rex/cvar.h>
 #include <rex/ui/switch_apm.h>
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -60,6 +63,37 @@ REXCVAR_DEFINE_INT32(bd_switch_handheld_height, 540, "Switch",
                      "Render height in handheld mode (16:9): 540 = 960x540, "
                      "720 or 0 = the full 1280x720. Applied at start.")
     .range(0, 1080);
+
+// Dynamic resolution (2026-11-12, the user's request; the picture is not the
+// same while it acts). From rr6-nx / the renut-nx base's
+// banjo_renut_dynamic_resolution in spirit: steps of 36 lines (16:9 widths stay
+// whole), down when the GPU's time a frame stays over a budget, up when the next
+// step is predicted to fit. Each change rebuilds the game's render targets at
+// the next frame submit (the path a window resize takes on the PC), a short
+// hitch, so changes are at least 2 s apart.
+REXCVAR_DEFINE_BOOL(bd_switch_dynamic_resolution, false, "Switch",
+                    "Handheld only: the render height moves between "
+                    "bd_switch_dynamic_low_height and bd_switch_handheld_height "
+                    "in steps of 36 lines with the GPU's load (the picture is "
+                    "softer while it is lower); FSR 1 scales it up (bd_switch_fsr)");
+REXCVAR_DEFINE_INT32(bd_switch_dynamic_low_height, 432, "Switch",
+                     "bd_switch_dynamic_resolution: the lowest render height "
+                     "(432 = 768x432)")
+    .range(288, 1080);
+REXCVAR_DEFINE_DOUBLE(bd_switch_dynamic_gpu_ms, 33.3, "Switch",
+                      "bd_switch_dynamic_resolution: the GPU time a frame (ms, "
+                      "a moving average) above which the height steps down; it "
+                      "steps up when the next height is predicted under 95% of it");
+REXCVAR_DEFINE_INT32(bd_switch_dynamic_test_s, 0, "Switch",
+                     "bd_switch_dynamic_resolution test: alternate the highest "
+                     "and lowest heights every N seconds whatever the load (0 off)")
+    .range(0, 600);
+REXCVAR_DEFINE_INT32(bd_switch_fsr, 1, "Switch",
+                     "Upscale the rendered image to the screen with AMD FSR 1 "
+                     "(EASU) instead of bilinear filtering: 0 never, 1 while "
+                     "bd_switch_dynamic_resolution is on, 2 whenever the image "
+                     "is smaller than the screen (handheld 960x540 too)")
+    .range(0, 2);
 
 #if defined(PLUME_DEKO3D)
 REXCVAR_DEFINE_INT32(bd_deko3d_uam_flags, 431, "Switch",
@@ -270,8 +304,17 @@ void ApplySwitchClocks() {
 #endif
 }
 
+namespace {
+// The height dynamic resolution has chosen (0: none yet, the configured one).
+std::atomic<int> g_dynamic_height{0};
+} // namespace
+
 bool SwitchHandheldRenderSize(u32 &w, u32 &h) {
-  const int height = REXCVAR_GET(bd_switch_handheld_height);
+  const int configured = REXCVAR_GET(bd_switch_handheld_height);
+  const int dynamic = g_dynamic_height.load(std::memory_order_relaxed);
+  const int height = (dynamic > 0 && REXCVAR_GET(bd_switch_dynamic_resolution))
+                         ? dynamic
+                         : configured;
   if (height <= 0 || height >= 720)
     return false;
   if (appletGetOperationMode() != AppletOperationMode_Handheld)
@@ -279,6 +322,90 @@ bool SwitchHandheldRenderSize(u32 &w, u32 &h) {
   h = static_cast<u32>(height) & ~1u;
   w = ((h * 16 + 8) / 9) & ~1u; // 540 -> 960
   return true;
+}
+
+bool SwitchDynamicResolutionFrame(double gpu_ms) {
+  if (!REXCVAR_GET(bd_switch_dynamic_resolution) || !(gpu_ms > 0.0))
+    return false;
+  if (appletGetOperationMode() != AppletOperationMode_Handheld)
+    return false;
+  int high = REXCVAR_GET(bd_switch_handheld_height);
+  if (high <= 0 || high >= 720)
+    high = 720;
+  high -= high % 36;
+  int low = std::clamp(REXCVAR_GET(bd_switch_dynamic_low_height), 288, high);
+  low -= low % 36;
+  const double budget = REXCVAR_GET(bd_switch_dynamic_gpu_ms);
+  const int test_s = REXCVAR_GET(bd_switch_dynamic_test_s);
+
+  using Clock = std::chrono::steady_clock;
+  static Clock::time_point last_change{}, over_since{}, fit_since{};
+  static double ema = 0.0;
+  static bool settled = false;
+  const Clock::time_point now = Clock::now();
+  const auto seconds = [&](Clock::time_point t) {
+    return std::chrono::duration<double>(now - t).count();
+  };
+  int cur = g_dynamic_height.load(std::memory_order_relaxed);
+  if (cur <= 0)
+    cur = high;
+  if (!settled) {
+    settled = true;
+    last_change = now;
+    ema = gpu_ms;
+  }
+  ema = ema * 0.9 + gpu_ms * 0.1;
+
+  int next = cur;
+  if (test_s > 0) {
+    if (seconds(last_change) >= test_s)
+      next = cur == high ? low : high;
+  } else if (seconds(last_change) >= 2.0) {
+    // Down: a whole second over the budget.
+    if (ema > budget && cur > low) {
+      if (over_since == Clock::time_point{})
+        over_since = now;
+      if (seconds(over_since) >= 1.0)
+        next = cur - 36;
+    } else {
+      over_since = {};
+    }
+    // Up: the next height predicted under 95% of the budget for 2 s (the
+    // pixel ratio scales the whole GPU time, which overstates it: cautious).
+    const int up = std::min(cur + 36, high);
+    const double predicted =
+        ema * (double(up) * double(up)) / (double(cur) * double(cur));
+    if (next == cur && up != cur && predicted < budget * 0.95) {
+      if (fit_since == Clock::time_point{})
+        fit_since = now;
+      if (seconds(fit_since) >= 2.0)
+        next = up;
+    } else {
+      fit_since = {};
+    }
+  }
+  if (next == cur)
+    return false;
+  BD_INFO("[dynres] render height {} -> {} (GPU {:.1f} ms a frame, budget {:.1f}{})",
+          cur, next, ema, budget, test_s > 0 ? ", test mode" : "");
+  g_dynamic_height.store(next, std::memory_order_relaxed);
+  last_change = now;
+  over_since = {};
+  fit_since = {};
+  return true;
+}
+
+bool SwitchFsrWanted(u32 src_w, u32 src_h, u32 dst_w, u32 dst_h) {
+  if (src_w >= dst_w && src_h >= dst_h)
+    return false;
+  switch (REXCVAR_GET(bd_switch_fsr)) {
+  case 2:
+    return true;
+  case 1:
+    return REXCVAR_GET(bd_switch_dynamic_resolution);
+  default:
+    return false;
+  }
 }
 
 void SpreadCurrentThread(int core) {
