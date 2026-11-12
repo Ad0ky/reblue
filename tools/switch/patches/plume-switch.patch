@@ -2044,10 +2044,10 @@ index 0000000..ea03796
 +};
 diff --git a/plume_deko3d.h b/plume_deko3d.h
 new file mode 100644
-index 0000000..66017b4
+index 0000000..2b163f0
 --- /dev/null
 +++ b/plume_deko3d.h
-@@ -0,0 +1,726 @@
+@@ -0,0 +1,731 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): plume's render interface on deko3d, the Switch's own GPU API, for
 +// Renut's renderer (docs/deko3d-renderer.md). MIT, as plume. deko3d is zlib (fincs, devkitPro); the shaders are compiled
@@ -2768,15 +2768,20 @@ index 0000000..66017b4
 +        // 1 the draws are not sent (their state still is), 2 every scissor is one pixel (no pixel work), 4 fragment
 +        // barriers do not wait (their cache invalidations stay).
 +        unsigned diag = 0;
++        // Whether the experiments are on now: the renderer turns them on and off every other report window, so the
++        // screen shows between the measured windows and one run gives both numbers.
++        bool diagActive = false;
 +    };
 +    void Deko3DSetOptions(const Deko3DOptions &options);
 +    // banjo-nx (2026-10-19, render-thread proposal 13): read inline (barriers() reads it per call).
 +    extern Deko3DOptions g_deko3dOptions;
 +    inline const Deko3DOptions &Deko3DGetOptions() { return g_deko3dOptions; }
++    // re:Blue (2026-11-12): a bd_deko3d_diag experiment that is set and on in this window.
++    inline bool Deko3DDiag(unsigned bit) { return (g_deko3dOptions.diag & bit) && g_deko3dOptions.diagActive; }
 +};
 diff --git a/plume_deko3d_commands.cpp b/plume_deko3d_commands.cpp
 new file mode 100644
-index 0000000..8f3eb69
+index 0000000..5333af3
 --- /dev/null
 +++ b/plume_deko3d_commands.cpp
 @@ -0,0 +1,1419 @@
@@ -3027,7 +3032,7 @@ index 0000000..8f3eb69
 +            if (invalidate & DkInvalidateFlags_Image)
 +                bump(st.barriersImageInvalidate);
 +        }
-+        if ((Deko3DGetOptions().diag & 4) && mode == DkBarrier_Fragments)
++        if (Deko3DDiag(4) && mode == DkBarrier_Fragments)
 +            mode = DkBarrier_None;  // re:Blue (2026-11-12): diag experiment 4
 +        dkCmdBufBarrier(cmd, mode, invalidate);
 +        pendingBarrier = false;
@@ -3185,7 +3190,7 @@ index 0000000..8f3eb69
 +        if (graphicsPipeline->boundTextures)
 +            bindTextures();
 +        flushBarriers();
-+        if (!(Deko3DGetOptions().diag & 1))  // re:Blue (2026-11-12): diag experiment 1
++        if (!Deko3DDiag(1))  // re:Blue (2026-11-12): diag experiment 1
 +            dkCmdBufDraw(cmd, graphicsPipeline->primitive, vertexCount, instanceCount, startVertex, startInstance);
 +        ++statDraws;
 +    }
@@ -3213,7 +3218,7 @@ index 0000000..8f3eb69
 +        if (graphicsPipeline->boundTextures)
 +            bindTextures();
 +        flushBarriers();
-+        if (!(Deko3DGetOptions().diag & 1))  // re:Blue (2026-11-12): diag experiment 1
++        if (!Deko3DDiag(1))  // re:Blue (2026-11-12): diag experiment 1
 +            dkCmdBufDrawIndexed(cmd, graphicsPipeline->primitive, indexCount, instanceCount, startIndex, baseVertex, startInstance);
 +        ++statDraws;
 +    }
@@ -3517,7 +3522,7 @@ index 0000000..8f3eb69
 +            s.height = uint32_t(std::max(r.bottom - std::max(r.top, 0), 0));
 +        }
 +        scissorCount = count;
-+        if (Deko3DGetOptions().diag & 2) {  // re:Blue (2026-11-12): diag experiment 2
++        if (Deko3DDiag(2)) {  // re:Blue (2026-11-12): diag experiment 2
 +            const DkScissor one = {0, 0, 1, 1};
 +            dkCmdBufSetScissors(cmd, 0, &one, 1);
 +            return;
@@ -3526,7 +3531,7 @@ index 0000000..8f3eb69
 +    }
 +
 +    void Deko3DCommandList::restoreScissors() {
-+        if (Deko3DGetOptions().diag & 2) {
++        if (Deko3DDiag(2)) {
 +            const DkScissor one = {0, 0, 1, 1};
 +            dkCmdBufSetScissors(cmd, 0, &one, 1);
 +        }

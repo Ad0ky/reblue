@@ -89,7 +89,9 @@ REXCVAR_DEFINE_INT32(bd_deko3d_diag, 0, "Switch",
                      "deko3d GPU cost experiments, for measuring only: they "
                      "change or break the picture. Bits: 1 draws not sent, 2 "
                      "every scissor one pixel (no pixel work), 4 fragment "
-                     "barriers do not wait. 0 in play. Read at start.");
+                     "barriers do not wait. It runs every other 10 s GPU report "
+                     "window ([gpu-passes] says which), so the screen shows "
+                     "between them. 0 in play. Read at start.");
 #endif
 
 namespace bd::platform {
@@ -231,7 +233,7 @@ void ApplySwitchClocks() {
     BD_INFO("Switch: deko3d barriers: merged {}, lean {}{}",
             options.mergeBarriers ? "on" : "off", options.leanBarriers ? "on" : "off",
             options.diag ? " | GPU COST EXPERIMENT " + std::to_string(options.diag) +
-                               " ON (bd_deko3d_diag): the picture is wrong"
+                               " (bd_deko3d_diag) every other 10 s window: the picture is wrong in those"
                          : std::string());
     // A shader whose compile does not end is written here (uam_stuck_*.glsl).
     static const std::string logs = (bd::AppRootFolder() / "logs").string();

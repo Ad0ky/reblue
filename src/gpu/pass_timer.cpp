@@ -501,10 +501,23 @@ void Report(double window_s) {
   });
   const double frames = double(g_frames);
   const double frame_ms = g_frame_ns / frames / 1e6;
+  std::string experiment;
+#if defined(PLUME_DEKO3D)
+  // bd_deko3d_diag: the experiment runs every other window; this line says
+  // which state the window just measured had, then the state flips.
+  if (plume::g_deko3dOptions.diag) {
+    experiment = std::string(" | GPU COST EXPERIMENT ") +
+                 std::to_string(plume::g_deko3dOptions.diag) +
+                 (plume::g_deko3dOptions.diagActive ? " ON in this window"
+                                                    : " off in this window");
+    plume::g_deko3dOptions.diagActive = !plume::g_deko3dOptions.diagActive;
+  }
+#endif
   BD_INFO("[gpu-passes] {:.1f} s, {} frames: GPU {:.1f} ms per frame (worst "
-          "{:.1f}), {} distinct targets{}",
+          "{:.1f}), {} distinct targets{}{}",
           window_s, g_frames, frame_ms, g_worst_frame_ns / 1e6, rows.size(),
-          g_overflow ? " (some frames had more passes than timed)" : "");
+          g_overflow ? " (some frames had more passes than timed)" : "",
+          experiment);
   const size_t shown = std::min<size_t>(rows.size(), 14);
   for (size_t i = 0; i < shown; ++i) {
     const auto &[label, t] = rows[i];

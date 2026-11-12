@@ -469,3 +469,8 @@ settings, off by default: `bd_deko3d_merge_barriers`,
 `bd_deko3d_lean_barriers`. `bd_deko3d_diag` (bits, measuring only, the picture
 is wrong) takes GPU work out: 1 the draws, 2 the pixels (one-pixel scissor),
 4 the fragment barriers' waits.
+Runs A and D (2026-11-12, castle street, still with a new constant block per
+draw): merged + lean barriers took the fragment barriers from 80 to 46 a
+frame and the GPU time stayed 61.3 ms at ~4650 draws, so the barriers are not
+the cost. The diag experiments left the screen black, so they now run every
+other `[gpu-passes]` window (the line says which).
