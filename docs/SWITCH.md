@@ -579,6 +579,8 @@ draws spend ~48 ns a vertex, the shadow map's ~13. The toon vertex shaders
 (PC uam, flags 431): `bd_toon_vs_norm` 282 instructions (96 MOV), the skinned
 `bd_toon_vs_env` 725 (50 LDC: 19 bone rows read as
 `mix(0, exMatrix[min(i, 195)], i < 196)`, with 14 SSY/SYNC pairs). With the
-bone reads at element 0 it is 598 and has no LDC or SYNC. Experiment 32 (a
-whole run) does that in every vertex shader at its compile, to measure what
-the divergent constant reads cost on the console.
+bone reads at element 0 it is 598 and has no LDC or SYNC. Experiment 32 does
+that in every vertex shader (each pipeline gets both vertex shaders, the
+changed one bound in the windows the experiment is on; the first version
+changed the whole run and the game could not be played to the castle
+street), to measure what the divergent constant reads cost on the console.

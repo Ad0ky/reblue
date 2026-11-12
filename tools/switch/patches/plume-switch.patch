@@ -1,9 +1,9 @@
 diff --git a/plume_deko3d.cpp b/plume_deko3d.cpp
 new file mode 100644
-index 0000000..bae773d
+index 0000000..d1dbea0
 --- /dev/null
 +++ b/plume_deko3d.cpp
-@@ -0,0 +1,2058 @@
+@@ -0,0 +1,2070 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): device, memory, resources, shaders and pipelines. The command lists,
 +// the queue and the swapchain are in plume_deko3d_commands.cpp. docs/deko3d-renderer.md is the design; the facts about
@@ -1491,7 +1491,8 @@ index 0000000..bae773d
 +        return true;
 +    }
 +
-+    const DkShader *Deko3DDevice::loadVariant(const Deko3DShader *base, const RenderSpecConstant *specConstants, uint32_t specConstantsCount) {
++    const DkShader *Deko3DDevice::loadVariant(const Deko3DShader *base, const RenderSpecConstant *specConstants, uint32_t specConstantsCount,
++                                              bool diagBones) {
 +        Deko3DShaderImpl *shader = const_cast<Deko3DShaderImpl *>(static_cast<const Deko3DShaderImpl *>(base));
 +        // The constants this shader has whose value differs from its default, by id.
 +        std::string defines;
@@ -1529,12 +1530,12 @@ index 0000000..bae773d
 +            source += defines;
 +            source.append(shader->glsl, nl + 1, std::string::npos);
 +        }
-+        // re:Blue (2026-11-12): diag experiment 32 (a whole run, not alternating windows): every relative read of the
-+        // vertex constants ("VertexShaderConstants.<array>[min(<index>, <last>)]", the bone rows of skinning) reads
-+        // element 0, so the vertices of a warp all read the same constant address. Measures what the divergent
-+        // constant reads cost; the skinned models collapse. The text differs, so the variant compiles anew.
++        // re:Blue (2026-11-12): diag experiment 32 (diagBones): every relative read of the vertex constants
++        // ("VertexShaderConstants.<array>[min(<index>, <last>)]", the bone rows of skinning) reads element 0, so the
++        // vertices of a warp all read the same constant address. Measures what the divergent constant reads cost; the
++        // skinned models collapse. The text differs, so the variant compiles anew.
 +        bool patched = false;
-+        if (g_deko3dOptions.diag & 32) {
++        if (diagBones) {
 +            const std::string open = "[min(";
 +            size_t at = 0;
 +            while ((at = source.find(open, at)) != std::string::npos) {
@@ -1766,6 +1767,17 @@ index 0000000..bae773d
 +                ok = false;
 +                continue;
 +            }
++            // re:Blue (2026-11-12): experiment 32's vertex shader beside it, when it differs.
++            const DkShader *d = s;
++            if (i == 0 && (g_deko3dOptions.diag & 32)) {
++                d = loadVariant(stages[i], own ? vsSpec.data() : desc.specConstants,
++                                own ? uint32_t(vsSpec.size()) : desc.specConstantsCount, true);
++                if (!d)
++                    d = s;
++                p->hasDiag = p->hasDiag || d != s;
++            }
++            p->diagShaders[p->shaderCount] = d;
++            p->diagStageShaders[i] = d;
 +            p->shaders[p->shaderCount++] = s;
 +            p->stageShaders[i] = s;  // banjo-nx (2026-10-19)
 +            p->stageMask |= 1u << dkStages[i];
@@ -2064,10 +2076,10 @@ index 0000000..bae773d
 +};
 diff --git a/plume_deko3d.h b/plume_deko3d.h
 new file mode 100644
-index 0000000..4668964
+index 0000000..77b4d57
 --- /dev/null
 +++ b/plume_deko3d.h
-@@ -0,0 +1,734 @@
+@@ -0,0 +1,741 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): plume's render interface on deko3d, the Switch's own GPU API, for
 +// Renut's renderer (docs/deko3d-renderer.md). MIT, as plume. deko3d is zlib (fincs, devkitPro); the shaders are compiled
@@ -2311,6 +2323,11 @@ index 0000000..4668964
 +
 +    struct Deko3DGraphicsPipeline : Deko3DPipeline {
 +        const DkShader *shaders[3] = {};  // vertex, geometry, fragment (null when absent)
++        // re:Blue (2026-11-12): with bd_deko3d_diag bit 32, the same with experiment 32's vertex shader, bound in the
++        // windows the experiment is on (null without one).
++        const DkShader *diagShaders[3] = {};
++        const DkShader *diagStageShaders[3] = {};
++        bool hasDiag = false;
 +        uint32_t stageMask = 0;
 +        uint32_t shaderCount = 0;
 +        bool valid = false;
@@ -2696,7 +2713,9 @@ index 0000000..4668964
 +        void retire(const Deko3DImageAlloc &image, DkMemBlock block);
 +        void collectRetired();
 +        void noteSubmission(); // after a submission: a fence for its serial
-+        const DkShader *loadVariant(const Deko3DShader *shader, const RenderSpecConstant *specConstants, uint32_t specConstantsCount);
++        // re:Blue (2026-11-12): diagBones, the variant with bd_deko3d_diag experiment 32's text change.
++        const DkShader *loadVariant(const Deko3DShader *shader, const RenderSpecConstant *specConstants, uint32_t specConstantsCount,
++                                    bool diagBones = false);
 +        bool compile(DkStage stage, const std::string &source, std::vector<uint8_t> &dksh, std::string &log);
 +        bool loadCode(const std::vector<uint8_t> &dksh, DkShader &shader, const char *what);
 +        void compileWorker();
@@ -2788,8 +2807,8 @@ index 0000000..4668964
 +        // 1 the draws are not sent (their state still is), 2 every scissor is one pixel (no pixel work), 4 fragment
 +        // barriers do not wait (their cache invalidations stay), 8 every draw is cut to one primitive (3 vertices
 +        // or indices, one instance): what is left is the cost of a draw as such, 16 every vertex buffer has stride 0
-+        // (the vertex shaders run, the vertex data reads and the triangles go), 32 (whole run) every relative read of
-+        // the vertex constants (skinning's bone rows) reads element 0.
++        // (the vertex shaders run, the vertex data reads and the triangles go), 32 every relative read of the vertex
++        // constants (skinning's bone rows) reads element 0 (both vertex shaders are made with the pipeline).
 +        unsigned diag = 0;
 +        // Whether the experiments are on now: the renderer turns them on and off every other report window, so the
 +        // screen shows between the measured windows and one run gives both numbers.
@@ -2804,10 +2823,10 @@ index 0000000..4668964
 +};
 diff --git a/plume_deko3d_commands.cpp b/plume_deko3d_commands.cpp
 new file mode 100644
-index 0000000..39ebf29
+index 0000000..2af6f24
 --- /dev/null
 +++ b/plume_deko3d_commands.cpp
-@@ -0,0 +1,1438 @@
+@@ -0,0 +1,1440 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): command lists, the queue and the swapchain (plume_deko3d.cpp has the
 +// device). docs/deko3d-renderer.md section 4 maps each plume call to deko3d.
@@ -3278,9 +3297,11 @@ index 0000000..39ebf29
 +        auto bump = [](std::atomic<uint64_t> &c) { c.store(c.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed); };
 +        bump(GetDeko3DStats().pipelineBinds);
 +        // Shaders: rebound when any stage differs (absent stages are disabled by the bind).
-+        const DkShader *const *want = p->stageShaders;  // banjo-nx: kept at creation
++        // re:Blue (2026-11-12): experiment 32's shaders in the windows it is on.
++        const bool diagBones = p->hasDiag && Deko3DDiag(32);
++        const DkShader *const *want = diagBones ? p->diagStageShaders : p->stageShaders;  // banjo-nx: kept at creation
 +        if (want[0] != boundShaders[0] || want[1] != boundShaders[1] || want[2] != boundShaders[2]) {
-+            dkCmdBufBindShaders(cmd, DkStageFlag_GraphicsMask, p->shaders, p->shaderCount);
++            dkCmdBufBindShaders(cmd, DkStageFlag_GraphicsMask, diagBones ? p->diagShaders : p->shaders, p->shaderCount);
 +            boundShaders[0] = want[0];
 +            boundShaders[1] = want[1];
 +            boundShaders[2] = want[2];
