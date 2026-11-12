@@ -515,3 +515,27 @@ took 50-53 ms: the CPU is right behind the GPU in these windows. Experiment
 8 (every draw cut to one triangle) tells a fixed cost per draw from the
 vertices. Four-core mode on the same runs: process cores 0xF, core 3 idle
 54-67% with the audio output, the Audio Worker and the compiles on it.
+
+Experiment 8 (2026-11-12, every draw cut to one triangle): GPU 9-10 ms a
+frame against 59 off, the scene pass 3-4 ms against 47: the cost is the
+draws' vertex and triangle work itself, not a fixed cost per draw. An older
+per-shader profile of a crowd scene (`bd_gpu_profile = 2`): the toon shader
+1567 draws, 445 K vertices and 45 K pixels a frame in 21.5 ms; 62% of those
+draws shade no pixel (hidden or off screen) and carry 54% of the vertices.
+The toon vertex shader compiles (PC uam, flags 431) to 251 instructions, 39
+registers, no scratch: ~1 ms of shader work for those vertices, so the
+~48 ns a vertex is spent elsewhere in the vertex path. Not found yet.
+
+## Plain-memory build (2026-11-12, opt-in)
+
+`run-switch-build.bat ... -PlainMemory` (`PLAIN_MEMORY=1`) runs
+`tools/switch/plain_memory.py` after the localized copies: the generated
+REX_LOAD/REX_STORE macros without `volatile`, a compiler barrier at each of
+the 24,900 loop headers and around each of the 32,559 FPSCR statements. Our
+own implementation of the renut-nx family's codegen step (their tools are
+GPL-3.0; masseffect-nx measured +15-20% fps with it). Every build first takes
+the changes back out, so a build without the switch is the generator's code.
+On one generated file (reblue_recomp.49.cpp, GCC -O2 AArch64) it gives 0.8%
+fewer instructions: a modest gain expected, and the fifth batch's corruption
+with plain copies was never explained, so it stays an A/B build with its own
+PGO profile.

@@ -21,6 +21,9 @@ param(
     [switch]$Lto,
     # Plain calls between recompiled functions (undoes tools/switch/direct_calls.py).
     [switch]$NoDirectCalls,
+    # Guest memory without volatile in the whole generated code (tools/switch/plain_memory.py): an A/B build that
+    # needs its own PGO profile. Off by default.
+    [switch]$PlainMemory,
     # Also the GPU test NRO (tools/switch/gputest, docs/SWITCH-deko3d.md P0.4).
     [switch]$GpuTest,
     # Leave the deko3d back end out (NVK only). With it, bd_switch_backend picks deko3d or nvk at start.
@@ -104,6 +107,7 @@ if ($Jobs -gt 0) { $envArgs += @("-e", "JOBS=$Jobs") }
 if ($Clean) { $envArgs += @("-e", "CLEAN=1") }
 if ($Lto) { $envArgs += @("-e", "LTO=1") }
 if ($NoDirectCalls) { $envArgs += @("-e", "DIRECT_CALLS=0") }
+if ($PlainMemory) { $envArgs += @("-e", "PLAIN_MEMORY=1") }
 if ($GpuTest) { $envArgs += @("-e", "GPUTEST=1") }
 if ($NoDeko3d) { $envArgs += @("-e", "DEKO3D=0") } else { $envArgs += @("-e", "DEKO3D=1") }
 

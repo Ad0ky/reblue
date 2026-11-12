@@ -27,7 +27,7 @@ shift
 :args_done
 
 echo Building re:Blue for Switch... (progress in switch-build.log)
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\switch\build-switch.ps1 %GAMEARG% %1 %2 %3 >> switch-build.log 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\switch\build-switch.ps1 %GAMEARG% %1 %2 %3 %4 %5 %6 %7 %8 %9 >> switch-build.log 2>&1
 set BUILDRC=%errorlevel%
 echo RESULT: build exit code %BUILDRC% >> switch-build.log
 if not "%BUILDRC%"=="0" (echo Build FAILED, see switch-build.log & goto end)

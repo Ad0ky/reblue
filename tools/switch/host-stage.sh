@@ -111,6 +111,9 @@ else
 fi
 [ -f generated/sources.cmake ] || die "codegen wrote no generated/sources.cmake"
 
+# The plain-memory build's changes come out first on every run (the steps below
+# read the generator's text); PLAIN_MEMORY=1 puts them back after the copies.
+python3 tools/switch/plain_memory.py "$root" --undo
 # Every run, not only after codegen: a hook added to the sources turns its call
 # sites back into plain calls. DIRECT_CALLS=0 restores all plain calls.
 log "Direct calls (tools/switch/direct_calls.py)"
@@ -123,6 +126,12 @@ fi
 # function does (src/platform/switch/hot_natives.cpp).
 log "Localized copies (tools/switch/localize.py)"
 python3 tools/switch/localize.py "$root"
+# Guest memory without volatile in the whole generated tree: an A/B build with
+# its own PGO profile, off by default (tools/switch/plain_memory.py).
+if [ "${PLAIN_MEMORY:-0}" = 1 ]; then
+    log "Plain guest memory (tools/switch/plain_memory.py)"
+    python3 tools/switch/plain_memory.py "$root"
+fi
 
 # ---------------------------------------------------------------- shaders
 log "Host XenosRecomp"
