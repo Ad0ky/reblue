@@ -552,3 +552,13 @@ link drops it. The renut-nx base's guide (`hand-and-machine-optimising-guide.md`
 "in place"); the default hooked form keeps them for finding a copy that
 misbehaves. Each form needs its own PGO profile. The same copies run in both,
 so the picture is the same.
+
+Four-core mode and a hang (2026-11-12): with `switch_system_core_mixer = 1`
+an in-place PGO-generate build froze at a warp (no crash report; the log
+stops after the warp's texture flush); the same NRO with
+`switch_system_core = 0` warped normally. On core 3 the shader compile
+thread ran at the 0x3B it inherits and an XAudio engine thread at 0x2D, which
+the reverb keeps busy after a load: the compiles could not run. The compile
+thread now gets 0x2C on the system core (above the engine threads, below the
+audio output and the Audio Worker). `switch_system_core_mixer` stays 0 by
+default.

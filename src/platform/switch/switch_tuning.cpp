@@ -243,9 +243,14 @@ void ApplySwitchClocks() {
     options.mergeBarriers = REXCVAR_GET(bd_deko3d_merge_barriers);
     options.leanBarriers = REXCVAR_GET(bd_deko3d_lean_barriers);
     options.diag = static_cast<unsigned>(REXCVAR_GET(bd_deko3d_diag));
-    // Four-core mode (from renut-nx): the uam compile thread on the system core when there is one.
-    if (RexSwitchSystemCoreCompiles())
+    // Four-core mode (from renut-nx): the uam compile thread on the system core when there is one, at 0x2C: below
+    // the audio output (0x2A) and the Audio Worker (0x2B), above the XAudio engine threads moved there (0x2D). At
+    // the 0x3B it had otherwise, an engine thread busy with the reverb after a load (switch_system_core_mixer = 1)
+    // kept it from running and the game hung at a warp waiting for its shaders (2026-11-12).
+    if (RexSwitchSystemCoreCompiles()) {
       options.compileCore = RexSwitchSystemCore();
+      options.compilePriority = 0x2C;
+    }
     plume::Deko3DSetOptions(options);
     BD_INFO("Switch: deko3d barriers: merged {}, lean {}{}",
             options.mergeBarriers ? "on" : "off", options.leanBarriers ? "on" : "off",
