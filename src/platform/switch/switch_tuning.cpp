@@ -96,7 +96,8 @@ REXCVAR_DEFINE_INT32(bd_deko3d_diag, 0, "Switch",
                      "deko3d GPU cost experiments, for measuring only: they "
                      "change or break the picture. Bits: 1 draws not sent, 2 "
                      "every scissor one pixel (no pixel work), 4 fragment "
-                     "barriers do not wait, 8 every draw cut to one triangle. It runs every other 10 s GPU report "
+                     "barriers do not wait, 8 every draw cut to one triangle, 16 "
+                     "every vertex buffer at stride 0 (vertex shaders only). It runs every other 10 s GPU report "
                      "window ([gpu-passes] says which), so the screen shows "
                      "between them. 0 in play. Read at start.");
 #endif

@@ -562,3 +562,11 @@ the reverb keeps busy after a load: the compiles could not run. The compile
 thread now gets 0x2C on the system core (above the engine threads, below the
 audio output and the Audio Worker). `switch_system_core_mixer` stays 0 by
 default.
+
+In place + four-core, usual route (2026-11-12, its own PGO profile, mixer
+threads on 0-2): the warp is fine; median 28.4 fps (test1 28.5); in the
+castle street's slowest windows the Draw Thread at 73-77% (test1 80-87%) and
+the Main Thread at 67-73% (69-73%), core 3 at least 55% idle, but the same
+16.6-18.4 fps: the GPU takes 54-60 ms a frame there. Experiment 16 (vertex
+buffers at stride 0) tells the vertex shaders from the vertex data reads and
+the triangles.

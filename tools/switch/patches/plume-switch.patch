@@ -2044,10 +2044,10 @@ index 0000000..ea03796
 +};
 diff --git a/plume_deko3d.h b/plume_deko3d.h
 new file mode 100644
-index 0000000..7f39bc9
+index 0000000..6f559b6
 --- /dev/null
 +++ b/plume_deko3d.h
-@@ -0,0 +1,732 @@
+@@ -0,0 +1,733 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): plume's render interface on deko3d, the Switch's own GPU API, for
 +// Renut's renderer (docs/deko3d-renderer.md). MIT, as plume. deko3d is zlib (fincs, devkitPro); the shaders are compiled
@@ -2767,7 +2767,8 @@ index 0000000..7f39bc9
 +        // re:Blue (2026-11-12): GPU cost experiments, changing the picture, for measuring only (0 in play). Bits:
 +        // 1 the draws are not sent (their state still is), 2 every scissor is one pixel (no pixel work), 4 fragment
 +        // barriers do not wait (their cache invalidations stay), 8 every draw is cut to one primitive (3 vertices
-+        // or indices, one instance): what is left is the cost of a draw as such.
++        // or indices, one instance): what is left is the cost of a draw as such, 16 every vertex buffer has stride 0
++        // (the vertex shaders run, the vertex data reads and the triangles go).
 +        unsigned diag = 0;
 +        // Whether the experiments are on now: the renderer turns them on and off every other report window, so the
 +        // screen shows between the measured windows and one run gives both numbers.
@@ -2782,10 +2783,10 @@ index 0000000..7f39bc9
 +};
 diff --git a/plume_deko3d_commands.cpp b/plume_deko3d_commands.cpp
 new file mode 100644
-index 0000000..26da80b
+index 0000000..39ebf29
 --- /dev/null
 +++ b/plume_deko3d_commands.cpp
-@@ -0,0 +1,1427 @@
+@@ -0,0 +1,1438 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): command lists, the queue and the swapchain (plume_deko3d.cpp has the
 +// device). docs/deko3d-renderer.md section 4 maps each plume call to deko3d.
@@ -3302,7 +3303,18 @@ index 0000000..26da80b
 +            // a buffer that may be gone. (banjo-nx: with the same attributes and buffers as bound, nothing to do.)
 +            if (changed(8)) {
 +                dkCmdBufBindVtxAttribState(cmd, p->attribs, p->attribCount);
-+                dkCmdBufBindVtxBufferState(cmd, p->vtxBuffers, p->vtxBufferCount);
++                if (Deko3DDiag(16) && p->vtxBufferCount) {
++                    // re:Blue (2026-11-12): diag experiment 16, every vertex of a draw reads its buffers' first
++                    // element: the vertex shaders still run, the vertex data reads and the triangles (all
++                    // degenerate) go. Takes effect at the next pipeline change after the window turns.
++                    DkVtxBufferState zero[32];
++                    const uint32_t n = std::min<uint32_t>(p->vtxBufferCount, 32);
++                    for (uint32_t i = 0; i < n; ++i)
++                        zero[i] = {0, p->vtxBuffers[i].divisor};
++                    dkCmdBufBindVtxBufferState(cmd, zero, n);
++                }
++                else
++                    dkCmdBufBindVtxBufferState(cmd, p->vtxBuffers, p->vtxBufferCount);
 +            }
 +            boundStateHash = p->stateHash;
 +        }
