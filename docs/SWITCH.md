@@ -504,3 +504,14 @@ under `switch_forwarder_program_id`; Atmosphere's ExeFS replacement applies
 it at the next launch. Under any other id (title takeover) nothing is
 written. The log's `Switch: process cores ...` line says what happened;
 `rex_perfil.log` shows `system core 3: idle N%` every 10 s.
+
+GPU cost experiments, castle street (2026-11-12, every other 10 s window):
+experiment 1 (draws not sent, their state still is): GPU 2-3 ms a frame
+against 57-59 off, so the state commands cost nothing by themselves;
+experiment 2 (one-pixel scissor): 29-36 ms against 58-60, the 960x536 scene
+pass 46.4 -> 27.3 ms, so ~19 ms is pixel work and ~27 ms vertex and
+primitive work for ~4000 draws. With the GPU's work gone the frame still
+took 50-53 ms: the CPU is right behind the GPU in these windows. Experiment
+8 (every draw cut to one triangle) tells a fixed cost per draw from the
+vertices. Four-core mode on the same runs: process cores 0xF, core 3 idle
+54-67% with the audio output, the Audio Worker and the compiles on it.
