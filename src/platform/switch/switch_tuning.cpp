@@ -43,6 +43,8 @@
 extern "C" int RexSwitchSystemCore(void);
 extern "C" bool RexSwitchSystemCoreCompiles(void);
 extern "C" void RexSwitchSystemCoreDescribe(char* out, size_t out_len);
+// The localized copies' keys and their "[hot]" line (hot_natives.cpp).
+extern "C" void ReblueHotInit();
 
 namespace plume {
 void VulkanSetPipelineCachePath(const std::string &path);
@@ -208,6 +210,7 @@ void OpenDkshCache(const std::string &path, unsigned uam_flags) {
 #endif
 
 void ApplySwitchClocks() {
+  ReblueHotInit();
   {
     // Four-core mode (re:Blue 2026-11-12, from renut-nx; SDK core/threading_switch.h).
     char cores[320];

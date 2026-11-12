@@ -26,6 +26,11 @@
 
 #include "cpu/hot_calls.h"
 
+// The in-place build (see REBLUE_HOT_HOOK below).
+#ifndef REBLUE_HOT_IN_PLACE
+#define REBLUE_HOT_IN_PLACE 0
+#endif
+
 // See the guest memory macros below.
 #ifndef REBLUE_HOT_VOLATILE
 #define REBLUE_HOT_VOLATILE 0
@@ -66,8 +71,9 @@ bool NativesOn() {
 #endif
     std::fprintf(stderr, "[hot] localized copies: %s (bd_cpu_natives), guest "
                  "memory %s, flush-mode skip %s (bd_cpu_flush_skip)\n",
-                 v ? "on" : "off", REBLUE_HOT_VOLATILE ? "volatile" : "plain",
-                 g_flush_skip ? "on" : "off");
+                 REBLUE_HOT_IN_PLACE ? "in place (the build's form; bd_cpu_natives and bd_cpu_natives_off do "
+                                       "not apply)" : (v ? "on" : "off"),
+                 REBLUE_HOT_VOLATILE ? "volatile" : "plain", g_flush_skip ? "on" : "off");
     return v;
   }();
   return on;
@@ -220,13 +226,25 @@ static inline void reblue_stvrx(u8 *base, u32 ea, const u8 *v) {
 #include "platform/switch/hot_flush_skip.h"
 
 // A function no hook replaces: this is its hook.
+// In-place build (REBLUE_HOT_IN_PLACE, run-switch-build.bat -InPlace; the renut-nx base's guide,
+// docs/hand-and-machine-optimising-guide.md, "hooked vs in place"): each copy IS the game function, with no on/off
+// check in front of it, so the original is left unreferenced and the link drops it. The keys
+// (bd_cpu_natives, bd_cpu_natives_off) do not apply; the hooked form (the default) keeps them for finding a copy
+// that misbehaves. Each form needs its own PGO profile.
+#if REBLUE_HOT_IN_PLACE
+#define REBLUE_HOT_ON(name, batch, index) true
+#define REBLUE_HOT_ORIGINAL(name) n_##name
+#else
+#define REBLUE_HOT_ON(name, batch, index) NativeOn(#name, batch, index)
+#define REBLUE_HOT_ORIGINAL(name) __imp__##name
+#endif
 #define REBLUE_HOT_HOOK(name, batch, index)                                    \
   extern "C" REX_FUNC(name) {                                                  \
-    static const bool on = NativeOn(#name, batch, index);                      \
+    static const bool on = REBLUE_HOT_ON(name, batch, index);                  \
     if (on) [[likely]]                                                         \
       n_##name(ctx, base);                                                     \
     else                                                                       \
-      __imp__##name(ctx, base);                                                \
+      REBLUE_HOT_ORIGINAL(name)(ctx, base);                                    \
   }
 // The same, counting and timing the copy's calls; a line every 10 s:
 // calls per second, average and longest call, share of one core.
@@ -265,13 +283,13 @@ static inline u64 HotTicks() { return 0; }
 #define REBLUE_HOT_TICKS() HotTicks()
 #define REBLUE_HOT_HOOK_TIMED(name, batch, index)                              \
   extern "C" REX_FUNC(name) {                                                  \
-    static const bool on = NativeOn(#name, batch, index);                      \
+    static const bool on = REBLUE_HOT_ON(name, batch, index);                  \
     static HotTimer timer;                                                     \
     const u64 t0 = REBLUE_HOT_TICKS();                                         \
     if (on) [[likely]]                                                         \
       n_##name(ctx, base);                                                     \
     else                                                                       \
-      __imp__##name(ctx, base);                                                \
+      REBLUE_HOT_ORIGINAL(name)(ctx, base);                                    \
     const u64 t1 = REBLUE_HOT_TICKS();                                         \
     const u64 d = t1 - t0;                                                     \
     timer.calls.fetch_add(1, std::memory_order_relaxed);                       \
@@ -285,10 +303,10 @@ static inline u64 HotTicks() { return 0; }
 #define REBLUE_HOT_CALLER(name)                                                \
   namespace bd::hot {                                                          \
   REX_FUNC(Call_##name) {                                                      \
-    if (NativesOn()) [[likely]]                                                \
+    if (REBLUE_HOT_IN_PLACE || NativesOn()) [[likely]]                         \
       n_##name(ctx, base);                                                     \
     else                                                                       \
-      __imp__##name(ctx, base);                                                \
+      REBLUE_HOT_ORIGINAL(name)(ctx, base);                                    \
   }                                                                            \
   }
 // The same when the script left the function to the recompiled code.
@@ -298,3 +316,7 @@ static inline u64 HotTicks() { return 0; }
   }
 
 #include "hot/localized.inc"
+
+// Reads bd_cpu_natives / bd_cpu_flush_skip and writes the "[hot]" line once the config is loaded (switch_tuning.cpp
+// calls it at start). The hooked form would also do it at the first call of a copy; the in-place form never asks.
+extern "C" void ReblueHotInit() { (void)NativesOn(); }

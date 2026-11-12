@@ -16,6 +16,8 @@
 #   NVK_SDK=path       portlibs/switch folder holding mesa-switch's lib/libvulkan.a
 #                      (default: searched under $DEVKITPRO)
 #   CLEAN=1            delete the Switch build folder first
+#   IN_PLACE=1         the localized copies in place of the game functions
+#                      (no on/off keys; its own PGO profile)
 #   PGO=generate|use   profile-guided optimisation (docs/SWITCH.md): the
 #                      instrumented NRO, or the optimised one from pgo/; each
 #                      in its own build folder
@@ -28,6 +30,7 @@ export DEVKITPRO
 JOBS="${JOBS:-$(nproc)}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 LTO="${LTO:-0}"
+IN_PLACE="${IN_PLACE:-0}"
 PGO="${PGO:-}"
 case "$PGO" in
     "") build="$root/out/switch-build" ;;
@@ -82,6 +85,7 @@ cmake -S . -B "$build" -G Ninja \
     -DDEVKITPRO="$DEVKITPRO" \
     -DREXGLUE_SWITCH_NVK_SDK="$NVK_SDK" \
     -DREBLUE_SWITCH_LTO="$([ "$LTO" = 1 ] && echo ON || echo OFF)" \
+    -DREBLUE_HOT_IN_PLACE="$([ "$IN_PLACE" = 1 ] && echo ON || echo OFF)" \
     -DREBLUE_PGO="$PGO" -DREBLUE_PGO_DIR="$root/pgo" \
     -DREBLUE_SWITCH_GPUTEST="$([ "$GPUTEST" = 1 ] && echo ON || echo OFF)" \
     -DREBLUE_SWITCH_DEKO3D="$([ "$DEKO3D" = 1 ] && echo ON || echo OFF)"

@@ -48,6 +48,12 @@ add_compile_definitions(REBLUE_SWITCH_DATA_ROOT="${REBLUE_SWITCH_DATA_ROOT}")
 # with the direct calls (tools/switch/direct_calls.py, host stage) the compiler
 # can inline small game functions across files. The whole-program step reads
 # ~110 MB of generated C++; nfsmw-nx's 144 MB fit in 16 GB with 2 jobs.
+# The localized copies in place of the game functions, with no on/off check (src/platform/switch/hot_natives.cpp,
+# REBLUE_HOT_HOOK): the renut-nx base's guide ships this form. Needs its own PGO profile.
+option(REBLUE_HOT_IN_PLACE "Localized copies in place of the game functions (no bd_cpu_natives keys)" OFF)
+if(REBLUE_HOT_IN_PLACE)
+    add_compile_definitions(REBLUE_HOT_IN_PLACE=1)
+endif()
 option(REBLUE_SWITCH_LTO "Link-time optimisation (needs a lot of RAM on the build machine)" OFF)
 set(REBLUE_SWITCH_LTO_JOBS "2" CACHE STRING "Parallel LTRANS jobs for the LTO link")
 

@@ -539,3 +539,16 @@ On one generated file (reblue_recomp.49.cpp, GCC -O2 AArch64) it gives 0.8%
 fewer instructions: a modest gain expected, and the fifth batch's corruption
 with plain copies was never explained, so it stays an A/B build with its own
 PGO profile.
+
+## In-place copies (2026-11-12, opt-in)
+
+`run-switch-build.bat ... -InPlace` (`IN_PLACE=1`, CMake
+`REBLUE_HOT_IN_PLACE`): each localized copy is the game function itself, with
+no on/off check in front of it, so the original is unreferenced and the LTO
+link drops it. The renut-nx base's guide (`hand-and-machine-optimising-guide.md`,
+"hooked vs in place") ships this form: on SASRT it measured -2% process CPU,
+-4% on the game thread, 4 MB less NRO. The keys `bd_cpu_natives` and
+`bd_cpu_natives_off` do not apply to it (the startup `[hot]` line says
+"in place"); the default hooked form keeps them for finding a copy that
+misbehaves. Each form needs its own PGO profile. The same copies run in both,
+so the picture is the same.
