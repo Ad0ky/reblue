@@ -198,13 +198,15 @@ REX_HOOK_RAW(bdCreateRenderTargetTextures) {
   // Dynamic resolution: the new render rect takes effect here, with the
   // targets rebuilt just below, so no frame is drawn at one size into
   // targets of the other.
+  u32 old_w = 0, old_h = 0;
+  Output::RenderSize(old_w, old_h);
   Output::ApplyRequestedRecompute();
   u32 w = 0;
   u32 h = 0;
   if (Output::RenderSize(w, h)) {
     const u32 head = ctx.r3.u32;
-    const u32 want_w = (static_cast<u32>(ctx.f1.f64) + 7) & ~7u;
-    const u32 want_h = (static_cast<u32>(ctx.f2.f64) + 7) & ~7u;
+    u32 want_w = (static_cast<u32>(ctx.f1.f64) + 7) & ~7u;
+    u32 want_h = (static_cast<u32>(ctx.f2.f64) + 7) & ~7u;
 
     rex::CallFrame frame(ctx);
     static u32 applied = Output::Generation();
@@ -212,6 +214,23 @@ REX_HOOK_RAW(bdCreateRenderTargetTextures) {
     if (generation != applied) {
       applied = generation;
       RebuildForOutputSize(frame, base, w, h);
+      // The game read the size it passes here (f1/f2) before the rebuild
+      // wrote the new one, so on this call it still asks for the old size:
+      // its list of render targets stayed a frame at the old size while the
+      // frame was drawn at the new one (the picture shrunk into the top-left
+      // corner at each dynamic resolution change). The old render size
+      // becomes the new one here, on this call too.
+      const bool stale = want_w == ((old_w + 7) & ~7u) &&
+                         want_h == ((old_h + 7) & ~7u) &&
+                         (old_w != w || old_h != h);
+      BD_INFO("[output-res] targets asked for {}x{} at the change{}", want_w,
+              want_h, stale ? " (the old size: given the new one)" : "");
+      if (stale) {
+        ctx.f1.f64 = double(w);
+        ctx.f2.f64 = double(h);
+        want_w = (w + 7) & ~7u;
+        want_h = (h + 7) & ~7u;
+      }
     }
     ResizeStaleRenderTargets(frame, base, head, want_w, want_h);
   }

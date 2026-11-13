@@ -654,3 +654,10 @@ Switch build: sub_8272EB40 was listed in localized.txt without "hooked", so the
 copy's own hook took the symbol (stderr never printed the "[anim-curve] native
 key search" line). Now listed "hooked" and the native calls the copy through
 REBLUE_HOT_CALL, as sub_8272EC00 does.
+
+Fourth run (c5cd76d): the shrunk frame still showed at the changes. Likely
+cause: bdCreateRenderTargetTextures gets the size to give its render target
+list (f1/f2) from the guest dims before our rebuild writes the new ones, so on
+the change call the list stayed at the old size for a frame. When f1/f2 equal
+the old render size at a change they are now given the new one, and a log line
+says what the game asked for.
