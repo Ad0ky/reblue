@@ -460,9 +460,30 @@ void Video::Present(GuestTexture *frontBuffer) {
   // Both checks come before the swapchain acquire: an image acquired and not
   // presented is lost, and deko3d aborts on the next acquire once none is left
   // (the console crashed at the first change, 2026-11-13).
+  // The game draws the first frame at the new render rect into the old
+  // targets (rebuilt one frame later): that frame showed the picture shrunk
+  // into the top-left corner. So the hold starts at the render rect change and
+  // lasts until the source matches it (at most 6 frames, in case the source is
+  // something not render-sized).
   {
     static u32 s_last_w = 0, s_last_h = 0;
+    static u32 s_gen = Output::Generation();
     static int s_hold = 0;
+    static int s_wait = 0;
+    const u32 gen = Output::Generation();
+    if (gen != s_gen) {
+      s_gen = gen;
+      s_wait = 6;
+    }
+    if (s_wait > 0) {
+      u32 rw = 0, rh = 0;
+      if (Output::RenderSize(rw, rh) && (rt->width != rw || rt->height != rh)) {
+        --s_wait;
+        AbandonFrame(s, lock);
+        return;
+      }
+      s_wait = 0;
+    }
     if (s_last_w != 0 && (rt->width != s_last_w || rt->height != s_last_h))
       s_hold = 2;
     s_last_w = rt->width;

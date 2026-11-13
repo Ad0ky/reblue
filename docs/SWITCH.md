@@ -626,3 +626,9 @@ The two-frame hold crashed the console at the first change (castle street):
 it returned after the swapchain acquire, so the acquired image was never
 presented and deko3d aborted in dkQueueAcquireImage once none was left. The
 hold (and the "no drawable RT" skip) now come before the acquire.
+
+Second run (2026-11-13): no crash; at a change one frame showed the picture
+shrunk into the top-left corner (the frame the game draws at the new render
+rect into the old 960x536 targets, rebuilt a frame later). The hold now starts
+at the render rect change (Output::Generation) and lasts until the present
+source has the new size (at most 6 frames), then two more.
