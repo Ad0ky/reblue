@@ -1,175 +1,117 @@
-<h1 align="center">
-  <img width="1480" height="662" alt="Untitled-1" src="https://github.com/user-attachments/assets/1779fdfd-bc3a-416d-8b6c-38874d8eae93" />
-  <a href="https://discord.gg/92MCyYDpuY">
-    <img src="https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white" alt="Discord">
-  </a>
-</h1>
+<div align="center">
 
-> [!IMPORTANT]
-> re:Blue is an unofficial project and contains NO ASSETS from the original game.
-> This project is useless unless you have a legal backup of the ISO images from the Global release (US/EU, Asia/JP support coming soon).
+# re:Blue for Nintendo Switch
 
+**Blue Dragon (Xbox 360), recompiled to run natively on the Nintendo Switch.**
 
-# re:Blue
+[![Release](https://img.shields.io/github/v/release/Ad0ky/reblue?include_prereleases&label=release)](https://github.com/Ad0ky/reblue/releases)
+[![Downloads](https://img.shields.io/github/downloads/Ad0ky/reblue/total?label=downloads)](https://github.com/Ad0ky/reblue/releases)
+[![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue)](LICENSE)
+![Nintendo Switch](https://img.shields.io/badge/Nintendo%20Switch-homebrew-E60012)
+![deko3d](https://img.shields.io/badge/graphics-deko3d-5E5E5E)
 
-re:Blue rebuilds Blue Dragon as a native application through static recompilation, translating the original code into something your machine runs directly rather than emulating a console around it. That opens the door to things an emulator cannot reach: higher frame rates, modern resolutions, and real mod support.
+### [Download](https://github.com/Ad0ky/reblue/releases) · [Installation guide](docs/INSTALL-SWITCH.md) · [Report a problem](https://github.com/Ad0ky/reblue/issues)
 
-## Table of Contents
+By **Ad0ky**, based on [zolaware's re:Blue](https://github.com/zolaware/reblue).
+Free and open source: if you paid for this, ask for a refund.
 
-- [Hardware Requirements](#hardware-requirements)
-- [How to Install](#how-to-install)
-- [Features](#features)
-- [FAQ](#faq)
-- [Building](#building)
-- [Credits](#credits)
-- [License](#license)
+</div>
 
-## Hardware Requirements
+## What this is
 
-Requires all three retail Blue Dragon discs or their disc images. Steam Deck is supported. 64-bit ARM processors are supported on Linux and macOS. Windows is x86-64 only. 
+A homebrew build of re:Blue for Switch consoles running custom firmware (Atmosphère). The game's Xbox 360 code is statically recompiled to native ARM64, and its graphics run on **deko3d**, the Switch's own graphics API. It plays at the Switch's stock clocks.
 
-### Minimum
+You need your own Blue Dragon discs. This project contains no game files.
 
-- OS: Windows 10 version 1909 or later, Ubuntu 24.04 / Fedora 40 / SteamOS 3.6 or later, or macOS 13.3 Ventura or later
-- Processor: Intel Core i5-4460 3.2 GHz 4 Core or AMD Ryzen 3 1200 or Apple M1, or equivalent
-- Memory: 8 GB RAM
-- GPU: Nvidia GTX 1050 Ti or AMD RX 570, or equivalent performance & VRAM. DirectX 12 with Shader Model 6.0, or Vulkan 1.2, or Metal
-- Storage: 15 GB available space
+> **Experimental.** The game is playable, but expect rough edges: report crashes, missing effects or anything that looks or sounds different from the Xbox 360 ([how](#reporting-a-problem)).
 
-### Recommended
+## Performance
 
-- OS: Windows 11, SteamOS 3.6, or macOS 14 Sonoma or later
-- Processor: AMD Ryzen 5 5600X or Intel Core i5-12400 or Apple M2, or equivalent performance, 6 physical cores minimum
-- Memory: 16 GB RAM
-- GPU: Nvidia RTX 2060 or AMD RX 5700, or equivalent performance & VRAM. 8 GB VRAM for 4K with MSAA
-- Storage: 15 GB available space
+Measured at the Switch's **stock clocks** (CPU 1020 MHz, GPU 460 MHz) in handheld mode, with the scene rendered at 960×540:
 
-## How to Install
+| Scene | Frame rate at stock clocks |
+| :--- | ---: |
+| Most of the field, towns and dungeons | **25–30 FPS**, the game's cap is 30 |
+| The castle town's main street, with its crowd | **16–18 FPS** |
 
-[Download latest release for your platform](https://github.com/zolaware/reblue/releases/latest) or [build yourself](#building)
+Entering a new area can hitch for a moment while its files load. The castle town's main street is limited by both the GPU (about 1.6 million vertices a frame) and the CPU (the animation of its many characters). Work on both continues.
 
-1. Blue Dragon shipped on three DVDs, and you will need a disc image of each one from your own copy of the game.
+## Getting started
 
-2. Run the executable. A setup wizard will guide you through the rest. You will be asked to point it at each of the three disc images in turn, and it will check each one before letting you continue. Once you pick where to install, the program copies itself there and restarts from that location, so you can delete the folder you extracted the zip into.
+You need:
 
-3. Pick a graphics quality preset. The wizard copies the game files out of the discs, and you are done. You may also install DLC from this installer or from the main menu under the config menu
+- a Switch with **Atmosphère** and the Homebrew Menu;
+- a **microSD card (exFAT)** with about **15 GB** free;
+- your **Blue Dragon discs** (all three, Global release: US/EU);
+- a **PC**, to prepare the game files once with the [PC version of re:Blue](https://github.com/zolaware/reblue/releases/latest).
 
-The wizard only needs to run once. If something later goes missing from your install, launching with `--repair` reopens it on your existing install and copies back only what it needs.
+Then:
 
-## Features
+1. **Prepare the game files:** install the PC version and let its installer read your three discs. It leaves a `game` folder.
+2. **Copy `reblue.nro`** to `sdmc:/switch/reblue/`, and the whole `game` folder into `sdmc:/switch/reblue/game/`.
+3. **Start the Homebrew Menu through title takeover:** hold **R** while starting any installed game, then choose **re:Blue**. Starting from the Album doesn't work, because the game needs the full application memory.
 
-Everything below is new to re:Blue. All of it is configurable in game, from the title screen or the camp menu.
+The [installation guide](docs/INSTALL-SWITCH.md) has every step, the SD card layout and how to update.
 
-### Graphics
+### Four-core mode
 
-- Resolutions up to 4K, windowed or fullscreen, on whichever monitor you pick
-- Aspect ratios 16:9, 4:3, 16:10, 21:9, 32:9, plus auto and stretch
-- Four quality presets, Low through Ultra
-- MSAA up to 8x or SSAA up to 4x
-- Anisotropic filtering
-- Shadow quality and draw distance
-- Depth of field adjustment
-- Unlocked FPS with optional caps and VSync
+Started from a **forwarder** that uses the 39-bit address space, the game can use all four CPU cores: the audio and shader compile threads move to the fourth core, away from the game. On the first start from a forwarder the game writes the forwarder's NPDM to `sdmc:/atmosphere/contents/<forwarder id>/exefs/main.npdm`; it takes effect from the next start. Through title takeover the game runs on three cores, as before.
 
-### Quality of Life
+## Settings
 
-- Unlocked frame rate, with optional caps at 30, 60, 90, or 120
-- Save from the camp menu anywhere instead of only at save points
-- Field of view adjustment, 45 through 120 degrees
-- Skip the in-game tutorial pages
-- Full area map on the world map screen, with zoom, floor switching, and a legend
-- Optional map markers for the hidden items, chests, and barriers a floor still has, plus per-floor counts, carried onto the field compass
-- The field HUD can fade out once you stop pressing anything, or stay off entirely
-- Achievement list viewable in game, with eight new re:Blue achievements alongside the original ones
-- Master volume control
-- Separate center, rear, and subwoofer levels for 5.1/7.1 tuning
-- Fully native keyboard and mouse support with cursor and look modes supported by mouse
-- Every controller button rebindable to a key, with mouse sensitivity and cursor opacity of your own
-- Menus take the mouse directly: hover a row to move the cursor, click to confirm, wheel to scroll
-- Custom input based icons/glyphs for hud elements, following the device you last used or pinned to Xbox, PlayStation, Switch, or Steam Deck
-- UI language and voice language chosen separately
+Most options are in the game's own **Settings** menu. The rest are in `sdmc:/switch/reblue/profiles/default/reblue.toml`, created on the first start. Each line is `name = value`; anything not listed keeps its default. The release's `reblue.toml` has the settings recommended for the Switch.
 
+| Option | Default | What it does |
+| :--- | :---: | :--- |
+| `bd_shadow_distance` | 1.0 | How far sun shadows reach. 2.0 removes most of the shadow pop-in and costs some speed in busy areas. |
+| `bd_shadow_update_interval` | 1 | The sun shadow map is redrawn every Nth frame. 2 or more is faster, but shadows of moving characters can flicker. |
+| `bd_shadow_min_pixels` | 4.0 | Objects smaller than this on screen cast no shadow. Lower it if mid-sized shadows go missing. |
+| `bd_reflection_update_interval` | 2 | Water reflections are redrawn every Nth frame. 1 redraws them every frame. |
+| `bd_reflection_min_pixels` | 3.0 | Objects smaller than this are left out of the reflection. |
+| `bd_interp_min_fps` | 36 | Above 30 FPS the game smooths motion between its 30 Hz updates. Below this rate smoothing turns off and the game holds 30 FPS. |
+| `bd_render_thread` | true | Draws are recorded on a thread of their own, on another core. |
+| `bd_scene_color_r11g11b10` | false | A lighter scene color format (recommended: true). Set false if glows or transparency look wrong. |
+| `bd_opt_audio_hints` | 1 | The game's Audio Hints: spoken and on-screen notices such as "Playable" or "Checkpoint". |
+| `bd_gpu_profile` | 1 | GPU timing in the log: 0 off, 1 render passes, 2 per shader (costs GPU time). |
 
-### Mods and DLC
+The [installation guide](docs/INSTALL-SWITCH.md#settings) explains the release's `reblue.toml`.
 
-- Built-in mod manager
-- Official DLC is supported
+## Reporting a problem
 
-### Platforms and Languages
+[Open an issue](https://github.com/Ad0ky/reblue/issues) with:
 
-- Windows on DX12 (Vulkan support is available if built from source)
-- Linux AMD64 and ARM64, including the Steam Deck and other handhelds
-- macOS ARM64 (AMD64 support is available if built from source)
-- Custom menus in English, French, German, Italian, and Spanish
+- the release version;
+- handheld or docked, and whether you start it through title takeover or a forwarder;
+- your `reblue.toml`;
+- what you were doing, and where in the game;
+- a photo or a short video if it is a graphics problem.
 
-## FAQ
+Also attach these files from the SD card, from the session where it happened:
 
-### Where is my save data and configuration stored?
+- the newest game log in `sdmc:/switch/reblue/logs/` (`reblue_001.log` or similar);
+- `sdmc:/switch/reblue/logs/rex/rex_stderr.log`;
+- `sdmc:/switch/reblue/logs/rex/rex_crash.log`, if there is one.
 
-Everything lives under the folder you installed to:
+For a performance report, create an empty file `sdmc:/switch/reblue/logs/rex/perfil_pilas.flag` before starting the game and also attach `logs/rex/rex_perfil.log`. The game runs a little slower while that file exists, so delete it afterwards.
 
-- Saves and settings: `profiles\default\`
-- Your configuration file: `profiles\default\reblue.toml`
-- Game files copied from your discs: `game\`
-- Mods: `mods\`
+Don't attach the game's files (`game/`).
 
-### I want to update the game. Will I lose my save data?
+## For developers
 
-No. Copy a newer build over your existing installation and your saves, settings, and mods are left alone. You do not need to reinstall or point the wizard at your discs again.
+- [docs/SWITCH.md](docs/SWITCH.md): building the Switch version, how the port works, every optimization with its measurements, logs and diagnostics.
+- [docs/SWITCH-deko3d.md](docs/SWITCH-deko3d.md): the deko3d graphics back end.
+- **Building:** on Windows with Docker, `run-switch-build.bat -Pgo use -Lto -InPlace` builds the release NRO (profile-guided, link-time optimized, in-place localized copies). The build needs the files from your own copy of Blue Dragon.
 
-### How do I install mods?
-
-Use the mod manager in the config menu. It accepts a mod folder or a zip file and puts everything in the right place for you
-
-### Can I keep more than one set of saves?
-
-Yes. Each profile is its own folder under `profiles\`, holding that profile's saves, settings, achievements, and DLC toggles. Launch with `--profile <name>` to pick one, and anything but `default` starts out fresh.
-
-## Building
-
-re:Blue builds with CMake and vcpkg against the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk).
-
-```sh
-cmake --preset win-amd64-release       # or linux-amd64-release
-cmake --build --preset win-amd64-release
-```
-
-Presets cover `win-amd64`, `win-vk`, `linux-amd64`, `linux-arm64`, `mac-amd64`, and `mac-arm64`, each in Debug, Release, and RelWithDebInfo. A `win-amd64` preset builds both the DX12 executable (`reblue.exe`) and the Vulkan one (`reblue_vk.exe`), and a `win-vk` one builds the Vulkan executable alone. As with running the game, building requires the files from your own copy of Blue Dragon.
+This repository also carries the rest of upstream's source, so the PC versions still build from it. For those, use [zolaware/reblue](https://github.com/zolaware/reblue).
 
 ## Credits
 
-Huge thanks to everyone who has put time into this. re:Blue would not be where it is without you.
+- **Switch port:** [Ad0ky](https://github.com/Ad0ky).
+- **re:Blue:** [crack](https://github.com/tomcl7) (project lead) and [rcold](https://github.com/RC0ld), with the playtesters, translators and contributors listed in [upstream's README](https://github.com/zolaware/reblue#credits).
+- **Research and tools:**
+  - [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk), [XenosRecomp](https://github.com/hedge-dev/XenosRecomp) and [UnleashedRecomp](https://github.com/hedge-dev/UnleashedRecomp) by hedge-dev, [plume](https://github.com/renderbag/plume) and [Xenia](https://github.com/xenia-project/xenia);
+  - on the Switch: [devkitPro](https://devkitpro.org), [libnx](https://github.com/switchbrew/libnx), [deko3d](https://github.com/devkitPro/deko3d) and [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere);
+  - ChanseyIsTheBest's [renut-nx base](https://github.com/ChanseyIsTheBest/renut_nx_ultimate_base), for the four-core mode and its optimization guide.
+- **Upscaling:** thanks to AMD for [FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT), used by the experimental dynamic resolution.
 
-### re:Blue Development Team
-
-- **[crack](https://github.com/tomcl7)** project lead and developer
-
-- **[rcold](https://github.com/RC0ld)** developer and has done an absurd amount for this project. A lot of re:Blue looks the way it does because of him.
-
-### Playtesting and Support
-
-- **[infernozotza](https://github.com/Zotza)** - Playtester 
-- **baus.98** - Playtester
-- **[wolfaeterni](https://github.com/Zolawolf)** - Playtester and French Translations 
-- **[griever666.](https://github.com/grv666)** - Playtester
-- **[fungus](https://github.com/fungoid-creature)** - Playtester
-- **[graine25](https://github.com/Graine25)** - macOS and Linux Development Support
-- **[zhyxeryz](https://github.com/Zhyxeryz)** - Playtester and German Translations
-- **[Azar42](https://github.com/Azar42)** - Playtesting
-- **[ZolaKluke](https://github.com/ZolaKluke)** - Playtester
-- **[emersed](https://github.com/RaphyEmersed)** - Playtester
-- **[mrcmunir](https://github.com/mrcmunir)** - Spanish Translations
-- **[mystixor](https://github.com/mystixor)** - German Translations
-- **[toby](https://github.com/TbyDtch)** - Graphic Design
-
-### Special Thanks
-
-- The **[ReXGlue SDK](https://github.com/rexglue/rexglue-sdk)** team, for the toolchain this project is built on.
-
-- The **[hedge-dev](https://github.com/hedge-dev)** team, for [XenosRecomp](https://github.com/hedge-dev/XenosRecomp) and for blazing the trail for Xbox 360 recompilations with [Unleashed Recompiled](https://github.com/hedge-dev/UnleashedRecomp).
-
-- The wider **Xbox 360 emulation scene**, and the [Xenia](https://github.com/xenia-project/xenia) project in particular. A lot of the hardest problems were solved long before this project started.
-
-## License
-
-See [LICENSE](LICENSE).
+Blue Dragon and its assets belong to their respective owners. This is an unofficial, non-commercial project under the [BSD 3-Clause License](LICENSE); dependencies keep their own licenses. Use data from discs you own, and don't commit game executables, archives, textures, audio, video, generated game code or captures to this repository.
