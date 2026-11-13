@@ -621,3 +621,8 @@ bilinear one as before), with FSR the height jumps straight between the two
 ends (an intermediate step saves ~2.5 ms, less than FSR costs), the step-up
 prediction leaves FSR's ~4.8 ms out, and after a size change the present
 keeps the last image on screen for two frames.
+
+The two-frame hold crashed the console at the first change (castle street):
+it returned after the swapchain acquire, so the acquired image was never
+presented and deko3d aborted in dkQueueAcquireImage once none was left. The
+hold (and the "no drawable RT" skip) now come before the acquire.

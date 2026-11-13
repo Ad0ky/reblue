@@ -439,6 +439,41 @@ void Video::Present(GuestTexture *frontBuffer) {
     return;
   }
 
+  GuestTexture *rt = SelectPresentSource(s, frontBuffer);
+
+  const bool have_rt_blit =
+      rt && rt->texture && rt->descriptorIndex != kInvalidDescriptorIndex &&
+      rt->sampleCount == plume::RenderSampleCount::COUNT_1;
+  if (!have_rt_blit) {
+    static std::atomic<u32> s_log{0};
+    const u32 n = s_log.fetch_add(1, std::memory_order_relaxed);
+    if (n < 5) {
+      BD_ERROR("Present #{} skipped: no drawable RT", n);
+    }
+    AbandonFrame(s, lock);
+    return;
+  }
+
+  // Dynamic resolution (bd_switch_dynamic_resolution): the first frames after
+  // the render size changes come from freshly rebuilt targets (the screen
+  // blinked at each change), so the last image stays on screen for two.
+  // Both checks come before the swapchain acquire: an image acquired and not
+  // presented is lost, and deko3d aborts on the next acquire once none is left
+  // (the console crashed at the first change, 2026-11-13).
+  {
+    static u32 s_last_w = 0, s_last_h = 0;
+    static int s_hold = 0;
+    if (s_last_w != 0 && (rt->width != s_last_w || rt->height != s_last_h))
+      s_hold = 2;
+    s_last_w = rt->width;
+    s_last_h = rt->height;
+    if (s_hold > 0) {
+      --s_hold;
+      AbandonFrame(s, lock);
+      return;
+    }
+  }
+
   u32 texture_index = 0;
 #if defined(__SWITCH__)
   const auto t_acquire = FrameStats::Clock::now();
@@ -466,38 +501,6 @@ void Video::Present(GuestTexture *frontBuffer) {
 #endif
   plume::RenderTexture *back = s.swap_chain->getTexture(texture_index);
   plume::RenderFramebuffer *back_fb = s.framebuffers[texture_index].get();
-
-  GuestTexture *rt = SelectPresentSource(s, frontBuffer);
-
-  const bool have_rt_blit =
-      rt && rt->texture && rt->descriptorIndex != kInvalidDescriptorIndex &&
-      rt->sampleCount == plume::RenderSampleCount::COUNT_1;
-  if (!have_rt_blit) {
-    static std::atomic<u32> s_log{0};
-    const u32 n = s_log.fetch_add(1, std::memory_order_relaxed);
-    if (n < 5) {
-      BD_ERROR("Present #{} skipped: no drawable RT", n);
-    }
-    AbandonFrame(s, lock);
-    return;
-  }
-
-  // Dynamic resolution (bd_switch_dynamic_resolution): the first frames after
-  // the render size changes come from freshly rebuilt targets (the screen
-  // blinked at each change), so the last image stays on screen for two.
-  {
-    static u32 s_last_w = 0, s_last_h = 0;
-    static int s_hold = 0;
-    if (s_last_w != 0 && (rt->width != s_last_w || rt->height != s_last_h))
-      s_hold = 2;
-    s_last_w = rt->width;
-    s_last_h = rt->height;
-    if (s_hold > 0) {
-      --s_hold;
-      AbandonFrame(s, lock);
-      return;
-    }
-  }
 
   BeginCommandList(s);
   pass_timer::MarkPresent(s.command_list, s.frame.load(std::memory_order_relaxed));
