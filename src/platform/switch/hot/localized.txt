@@ -64,7 +64,7 @@ sub_8217AE90
 bdSceneNodeUpdateCollision
 sub_822753E0
 sub_82491418
-sub_8272EB40
+sub_8272EB40 hooked
 bdMatrixSetRotation
 sub_824931B8
 sub_82422410

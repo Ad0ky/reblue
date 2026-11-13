@@ -641,3 +641,16 @@ old targets whatever the present did. The change is now only requested there
 bdCreateRenderTargetTextures hook, right before the targets are rebuilt.
 At 432 without FSR the castle street measured GPU 38-54 ms, 18-24 fps, with
 the game's CPU work at 40-50 ms a frame.
+
+Castle street CPU profile (ebf3a20, 8 windows): the Main Thread runs ~89%,
+about half of its samples in character animation: n_bdAnimKeyframeSample 21%
+(flat, no single hot loop), bdSinCos 12% (already native; call volume, three
+calls per Euler rotation), n_sub_8272EED0 8.5% (the curve key search inlined),
+n_bdAnimBoneEvaluate 5%. The Draw Thread waits for the Main Thread ~35% of
+its time; our render thread is idle ~60%.
+
+The native key search (engine/anim_curve.cpp, sub_8272EB40) never ran in the
+Switch build: sub_8272EB40 was listed in localized.txt without "hooked", so the
+copy's own hook took the symbol (stderr never printed the "[anim-curve] native
+key search" line). Now listed "hooked" and the native calls the copy through
+REBLUE_HOT_CALL, as sub_8272EC00 does.

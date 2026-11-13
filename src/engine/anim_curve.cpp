@@ -167,17 +167,22 @@ bool Same(const PPCContext &a, const PPCContext &b) {
 
 } // namespace
 
+// Listed "hooked" in localized.txt: before that the localized copy's own hook
+// took this symbol, so in the Switch build this native never ran (no
+// "[anim-curve] native key search" line in stderr; 2026-11-13 profile: the
+// copy of sub_8272EED0, with the search inlined, was 8.5% of the Main Thread in
+// the castle street).
 REX_HOOK_RAW(sub_8272EB40) {
   static const bool on = REXCVAR_GET(bd_native_anim_curve);
   if (!on || g_disabled) [[unlikely]] {
-    __imp__sub_8272EB40(ctx, base);
+    REBLUE_HOT_CALL(sub_8272EB40)(ctx, base);
     return;
   }
   if (g_verified < kVerifyCalls) [[unlikely]] {
     // The original first, on a copy; then the native on the real context.
     PPCContext ref = ctx;
     const u32 sp = ctx.r1.u32;
-    __imp__sub_8272EB40(ref, base);
+    REBLUE_HOT_CALL(sub_8272EB40)(ref, base);
     const u32 ref_ptr = bd::mem::load<u32>(kStateVa);
     const u32 ref_where = bd::mem::load<u32>(kStateVa + 12);
     const u64 ref_stack = bd::mem::load<u64>(sp - 16);

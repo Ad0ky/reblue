@@ -31,6 +31,7 @@
   X(D3DDevice_SetPixelShaderConstantFN)                                        \
   X(D3DDevice_SetVertexShaderConstantFN)                                        \
   X(bdDrawRecordListReplay)                                                    \
+  X(sub_8272EB40)                                                              \
   X(sub_8272EC00)
 namespace bd::hot {
 #define REBLUE_HOT_DECLARE_ONE(name)                                           \
