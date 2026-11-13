@@ -674,3 +674,13 @@ Lost Odyssey's port (LostOdysseyRecomp/gpu/dynamic_resolution.h) does it on the
 host side: the game keeps its 1280x720 view and the renderer sizes its own
 targets from a frame plan taken at a frame boundary, so the game never sees a
 change. re:Blue's output resolution changes the game's own surfaces instead.
+
+Dynamic resolution shelved (2026-11-13, off by default): the shrunk frame
+survived the back buffer and target list fixes, and every change became a
+212 ms frame. Lost Odyssey's host-side form is the alternative if it comes back.
+
+Vertex counters (2026-11-13): the vertex formats are the game's own (16-bit,
+packed normals, no expansion to 32-bit floats), so the vertex cost is not
+oversized data. A "[deko3d] vertices per frame" line now gives the vertices
+the draws ask for and the per-vertex bytes at those (before the post-transform
+cache), to size the geometry the castle street draws.

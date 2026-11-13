@@ -157,7 +157,8 @@ public:
                        st.barriersFragments.load(), st.barriersFull.load(), st.barriersImageInvalidate.load(),
                        st.copyBuffer.load(), st.copyUpload.load(), st.copyImage.load(), st.copyReadback.load(),
                        st.shaderCompiles.load(), st.shaderCacheHits.load(), st.descriptorWrites.load(),
-                       st.descriptorSame.load(), st.descriptorInvalidates.load()};
+                       st.descriptorSame.load(), st.descriptorInvalidates.load(), st.vertices.load(),
+                       st.vertexBytes.load()};
     double d[std::size(now)];
     for (size_t i = 0; i < std::size(now); ++i) {
       d[i] = double(now[i] - dk_last_[i]);
@@ -171,6 +172,9 @@ public:
     BD_INFO("[deko3d] descriptors per frame: {:.1f} written, {:.1f} rewritten with the same bytes (skipped) | "
             "{:.1f} descriptor and shader cache invalidations",
             d[12] / frames, d[13] / frames, d[14] / frames);
+    BD_INFO("[deko3d] vertices per frame: {:.0f}k asked for by the draws (indices or vertices, times instances), "
+            "{:.1f} MB of per-vertex data at those ({:.1f} bytes a vertex)",
+            d[15] / frames / 1000.0, d[16] / frames / 1048576.0, d[15] > 0 ? d[16] / d[15] : 0.0);
 #if REBLUE_UBO_CONSTANTS
     if (DeltaConstantsEnabled()) {
       u64 stages = 0, updates = 0, bytes = 0, regs = 0, misses = 0;
@@ -190,7 +194,7 @@ public:
               rq::SyncSites(frames));
     }
   }
-  u64 dk_last_[15] = {};
+  u64 dk_last_[17] = {};
 #endif
 
   static double Ms(Clock::time_point a, Clock::time_point b) {

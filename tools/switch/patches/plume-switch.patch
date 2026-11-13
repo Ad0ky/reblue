@@ -1,9 +1,9 @@
 diff --git a/plume_deko3d.cpp b/plume_deko3d.cpp
 new file mode 100644
-index 0000000..d1dbea0
+index 0000000..d541a07
 --- /dev/null
 +++ b/plume_deko3d.cpp
-@@ -0,0 +1,2070 @@
+@@ -0,0 +1,2073 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): device, memory, resources, shaders and pipelines. The command lists,
 +// the queue and the swapchain are in plume_deko3d_commands.cpp. docs/deko3d-renderer.md is the design; the facts about
@@ -1892,6 +1892,9 @@ index 0000000..d1dbea0
 +            p->vtxBuffers[slot.index].divisor = slot.classification == RenderInputSlotClassification::PER_INSTANCE_DATA ? 1 : 0;
 +            p->vtxBufferCount = std::max(p->vtxBufferCount, slot.index + 1);
 +        }
++        for (uint32_t i = 0; i < p->vtxBufferCount && i < 15; i++)
++            if (p->vtxBuffers[i].divisor == 0)
++                p->vertexBytes += p->vtxBuffers[i].stride;
 +
 +        uint64_t h = 0xcbf29ce484222325ull;
 +        h = mixHash(h, &p->primitive, sizeof(p->primitive));
@@ -2076,10 +2079,10 @@ index 0000000..d1dbea0
 +};
 diff --git a/plume_deko3d.h b/plume_deko3d.h
 new file mode 100644
-index 0000000..77b4d57
+index 0000000..69ee861
 --- /dev/null
 +++ b/plume_deko3d.h
-@@ -0,0 +1,741 @@
+@@ -0,0 +1,748 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): plume's render interface on deko3d, the Switch's own GPU API, for
 +// Renut's renderer (docs/deko3d-renderer.md). MIT, as plume. deko3d is zlib (fincs, devkitPro); the shaders are compiled
@@ -2134,6 +2137,9 @@ index 0000000..77b4d57
 +        // re:Blue (2026-11-12): descriptor writes that found the same bytes in the slot (no epoch advance), and the
 +        // invalidations of the GPU's descriptor and shader caches the command lists recorded.
 +        std::atomic<uint64_t> descriptorSame{0}, descriptorInvalidates{0};
++        // re:Blue (2026-11-13): vertices the draws asked for (index or vertex count times instances) and the per-vertex
++        // bytes those read before the post-transform cache (an upper bound on the vertex data fetched).
++        std::atomic<uint64_t> vertices{0}, vertexBytes{0};
 +        std::atomic<uint64_t> windowDraws{0}; // draws whose shaders read fetch data from memory (storage binding 15)
 +        // banjo-nx (2026-10-19): the barriers recorded, by what they wait for (DkBarrier_Primitives, _Fragments, _Full:
 +        // the 3D pipe drained, the copy engine as well), and those that invalidate the texture cache.
@@ -2349,6 +2355,9 @@ index 0000000..77b4d57
 +        uint32_t attribCount = 0;
 +        DkVtxBufferState vtxBuffers[16]{};
 +        uint32_t vtxBufferCount = 0;
++        // re:Blue (2026-11-13): bytes of per-vertex data a vertex reads (the strides of the per-vertex buffers below slot
++        // 15, the zero-filled one), for the vertex counters.
++        uint32_t vertexBytes = 0;
 +        bool usesBlendConstant = false;
 +        // UBO / SSBO slots each stage reads (vertex, geometry, fragment).
 +        uint32_t uboMask[3] = {}, ssboMask[3] = {};
@@ -2525,6 +2534,7 @@ index 0000000..77b4d57
 +        // banjo-nx (2026-10-19, render-thread proposal 13): per-draw counters of this list, added to the totals at end()
 +        // (no atomic read-modify-write per draw: the A57 has no LSE).
 +        uint64_t statDraws = 0, statWindowDraws = 0;
++        uint64_t statVertices = 0, statVertexBytes = 0;  // re:Blue (2026-11-13)
 +        void emitBarrier(DkBarrier mode, uint32_t invalidate);
 +        void flushBarriers() {
 +            if (pendingBarrier)
@@ -2823,10 +2833,10 @@ index 0000000..77b4d57
 +};
 diff --git a/plume_deko3d_commands.cpp b/plume_deko3d_commands.cpp
 new file mode 100644
-index 0000000..2af6f24
+index 0000000..dfccdbc
 --- /dev/null
 +++ b/plume_deko3d_commands.cpp
-@@ -0,0 +1,1440 @@
+@@ -0,0 +1,1447 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): command lists, the queue and the swapchain (plume_deko3d.cpp has the
 +// device). docs/deko3d-renderer.md section 4 maps each plume call to deko3d.
@@ -2991,7 +3001,10 @@ index 0000000..2af6f24
 +        Deko3DStats &st = GetDeko3DStats();
 +        st.draws.store(st.draws.load(std::memory_order_relaxed) + statDraws, std::memory_order_relaxed);
 +        st.windowDraws.store(st.windowDraws.load(std::memory_order_relaxed) + statWindowDraws, std::memory_order_relaxed);
++        st.vertices.store(st.vertices.load(std::memory_order_relaxed) + statVertices, std::memory_order_relaxed);
++        st.vertexBytes.store(st.vertexBytes.load(std::memory_order_relaxed) + statVertexBytes, std::memory_order_relaxed);
 +        statDraws = statWindowDraws = 0;
++        statVertices = statVertexBytes = 0;
 +    }
 +
 +    void Deko3DCommandList::flushDescriptorInvalidate() {
@@ -3239,6 +3252,8 @@ index 0000000..2af6f24
 +        if (!Deko3DDiag(1))  // re:Blue (2026-11-12): diag experiment 1
 +            dkCmdBufDraw(cmd, graphicsPipeline->primitive, vertexCount, instanceCount, startVertex, startInstance);
 +        ++statDraws;
++        statVertices += uint64_t(vertexCount) * instanceCount;
++        statVertexBytes += uint64_t(vertexCount) * instanceCount * graphicsPipeline->vertexBytes;
 +    }
 +
 +    void Deko3DCommandList::drawIndexedInstanced(uint32_t indexCount, uint32_t instanceCount, uint32_t startIndex, int32_t baseVertex, uint32_t startInstance) {
@@ -3271,6 +3286,8 @@ index 0000000..2af6f24
 +        if (!Deko3DDiag(1))  // re:Blue (2026-11-12): diag experiment 1
 +            dkCmdBufDrawIndexed(cmd, graphicsPipeline->primitive, indexCount, instanceCount, startIndex, baseVertex, startInstance);
 +        ++statDraws;
++        statVertices += uint64_t(indexCount) * instanceCount;
++        statVertexBytes += uint64_t(indexCount) * instanceCount * graphicsPipeline->vertexBytes;
 +    }
 +
 +    void Deko3DCommandList::setPipeline(const RenderPipeline *pipeline) {
