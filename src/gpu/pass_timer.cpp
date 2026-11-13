@@ -745,9 +745,11 @@ void Collect(u32 slot_index) {
   }
   const double frame_ns = double(end - start);
   // Dynamic resolution (bd_switch_dynamic_resolution): the frame's GPU time;
-  // a new handheld height is applied at the next frame submit.
+  // a new handheld height is applied where the game rebuilds its render
+  // targets (applying it here let the game draw a frame at the new size into
+  // the old targets: the picture shrunk into the top-left corner).
   if (bd::platform::SwitchDynamicResolutionFrame(frame_ns / 1e6))
-    Output::Recompute();
+    Output::RequestRecompute();
   g_frame_ns += frame_ns;
   g_worst_frame_ns = std::max(g_worst_frame_ns, frame_ns);
   ++g_frames;

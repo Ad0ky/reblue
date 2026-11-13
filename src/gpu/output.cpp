@@ -85,6 +85,20 @@ bool Output::Recompute() {
   return true;
 }
 
+namespace {
+std::atomic<bool> g_recompute_requested{false};
+}
+
+void Output::RequestRecompute() {
+  g_recompute_requested.store(true, std::memory_order_release);
+}
+
+bool Output::ApplyRequestedRecompute() {
+  if (!g_recompute_requested.exchange(false, std::memory_order_acq_rel))
+    return false;
+  return Recompute();
+}
+
 u32 Output::Generation() {
   return g_generation.load(std::memory_order_acquire);
 }

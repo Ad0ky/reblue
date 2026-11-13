@@ -195,6 +195,10 @@ void RebuildForOutputSize(rex::CallFrame &frame, u8 *base, u32 w, u32 h) {
 REX_EXTERN(__imp__bdCreateRenderTargetTextures);
 REX_HOOK_RAW(bdCreateRenderTargetTextures) {
   bd::gpu::rq::SyncIfThreaded(); // render thread plan: not queued
+  // Dynamic resolution: the new render rect takes effect here, with the
+  // targets rebuilt just below, so no frame is drawn at one size into
+  // targets of the other.
+  Output::ApplyRequestedRecompute();
   u32 w = 0;
   u32 h = 0;
   if (Output::RenderSize(w, h)) {

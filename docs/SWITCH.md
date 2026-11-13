@@ -632,3 +632,12 @@ shrunk into the top-left corner (the frame the game draws at the new render
 rect into the old 960x536 targets, rebuilt a frame later). The hold now starts
 at the render rect change (Output::Generation) and lasts until the present
 source has the new size (at most 6 frames), then two more.
+
+Third run (bd_switch_fsr 0): the shrunk frame was still there, at several
+changes. The render rect was changed from pass_timer's frame collection, in
+the middle of the game's frame, so a frame was drawn at the new size into the
+old targets whatever the present did. The change is now only requested there
+(Output::RequestRecompute) and applied at the start of the
+bdCreateRenderTargetTextures hook, right before the targets are rebuilt.
+At 432 without FSR the castle street measured GPU 38-54 ms, 18-24 fps, with
+the game's CPU work at 40-50 ms a frame.

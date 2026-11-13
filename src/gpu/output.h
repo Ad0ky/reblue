@@ -35,6 +35,11 @@ public:
   static void Init(rex::ui::Window *window);
 
   static bool Recompute();
+  // Recompute at the next engine render target rebuild point
+  // (bdCreateRenderTargetTextures), so the render rect and the targets change
+  // together (dynamic resolution). ApplyRequestedRecompute is called there.
+  static void RequestRecompute();
+  static bool ApplyRequestedRecompute();
   static u32 Generation();
 
   static bool RenderSize(u32 &w, u32 &h);
