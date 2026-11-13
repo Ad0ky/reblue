@@ -188,6 +188,11 @@ void RebuildForOutputSize(rex::CallFrame &frame, u8 *base, u32 w, u32 h) {
 
   CameraViewInit(frame, base, render, 0);
   BD_INFO("[output-res] engine surfaces rebuilt at {}x{}", w, h);
+  // The back buffer with them: left to the end of the next presented frame,
+  // the frames between drew the new size into the old back buffer (the
+  // picture shrunk into the top-left corner), and the present's hold, which
+  // skips those frames, kept it from being resized at all.
+  bd::gpu::Video::SyncBackBufferSize();
 }
 
 } // namespace

@@ -661,3 +661,16 @@ list (f1/f2) from the guest dims before our rebuild writes the new ones, so on
 the change call the list stayed at the old size for a frame. When f1/f2 equal
 the old render size at a change they are now given the new one, and a log line
 says what the game asked for.
+
+The c5cd76d run's log showed the real cause: "back buffer ->" came 130-220 ms
+after "engine surfaces rebuilt". The back buffer was resized only at the end of
+a presented frame (SyncBackBufferSizeLocked), and the present's hold skipped
+the frames while it had the old size, so it was not resized until the hold gave
+up after six frames and showed a frame drawn at the new size into the old back
+buffer. The rebuild in the bdCreateRenderTargetTextures hook now resizes the
+back buffer too (Video::SyncBackBufferSize).
+
+Lost Odyssey's port (LostOdysseyRecomp/gpu/dynamic_resolution.h) does it on the
+host side: the game keeps its 1280x720 view and the renderer sizes its own
+targets from a frame plan taken at a frame boundary, so the game never sees a
+change. re:Blue's output resolution changes the game's own surfaces instead.

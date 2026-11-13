@@ -77,6 +77,10 @@ public:
   static void RequestResize();
 
   static void SyncBackBufferSizeLocked();
+  // The same, taking the device lock: the dynamic resolution change resizes
+  // the back buffer together with the engine surfaces (it was resized only at
+  // the end of a presented frame, a frame or more after them).
+  static void SyncBackBufferSize();
 
   static void ResizeTexture(GuestTexture *tex, u32 width, u32 height);
 

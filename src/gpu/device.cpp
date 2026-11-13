@@ -605,6 +605,12 @@ void Video::SyncBackBufferSizeLocked() {
   BD_INFO("[output-res] back buffer -> {}x{}", w, h);
 }
 
+void Video::SyncBackBufferSize() {
+  auto &s = state();
+  std::lock_guard lock(s.mutex);
+  SyncBackBufferSizeLocked();
+}
+
 void Video::ResizeTexture(GuestTexture *tex, u32 width, u32 height) {
   if (!tex || !tex->texture || (tex->width == width && tex->height == height))
     return;
