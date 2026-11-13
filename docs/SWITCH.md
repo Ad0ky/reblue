@@ -612,3 +612,12 @@ is on (default), 2 whenever the image is smaller than the screen. On the PC
 uam it compiles to 557 instructions and 66 registers (12 TLD4), against 90 for
 the bilinear present: an estimated 3-4 ms a frame at 1280x720 on the
 console, to be measured (the `present` row of `[gpu-passes]`).
+
+First console run (2026-11-13, `bd_switch_dynamic_test_s = 10`): 12 height
+changes, no crash; the FSR present took 5.6-5.8 ms a frame (the bilinear one
+~0.9), and the screen blinked at each change. Now: FSR only below
+`bd_switch_handheld_height` (`bd_switch_fsr` 1; at 540 the present is the
+bilinear one as before), with FSR the height jumps straight between the two
+ends (an intermediate step saves ~2.5 ms, less than FSR costs), the step-up
+prediction leaves FSR's ~4.8 ms out, and after a size change the present
+keeps the last image on screen for two frames.

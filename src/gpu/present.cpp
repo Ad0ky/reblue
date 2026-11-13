@@ -482,6 +482,23 @@ void Video::Present(GuestTexture *frontBuffer) {
     return;
   }
 
+  // Dynamic resolution (bd_switch_dynamic_resolution): the first frames after
+  // the render size changes come from freshly rebuilt targets (the screen
+  // blinked at each change), so the last image stays on screen for two.
+  {
+    static u32 s_last_w = 0, s_last_h = 0;
+    static int s_hold = 0;
+    if (s_last_w != 0 && (rt->width != s_last_w || rt->height != s_last_h))
+      s_hold = 2;
+    s_last_w = rt->width;
+    s_last_h = rt->height;
+    if (s_hold > 0) {
+      --s_hold;
+      AbandonFrame(s, lock);
+      return;
+    }
+  }
+
   BeginCommandList(s);
   pass_timer::MarkPresent(s.command_list, s.frame.load(std::memory_order_relaxed));
   RecordPresentPass(s, rt, back, back_fb);

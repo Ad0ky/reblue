@@ -91,8 +91,11 @@ REXCVAR_DEFINE_INT32(bd_switch_dynamic_test_s, 0, "Switch",
 REXCVAR_DEFINE_INT32(bd_switch_fsr, 1, "Switch",
                      "Upscale the rendered image to the screen with AMD FSR 1 "
                      "(EASU) instead of bilinear filtering: 0 never, 1 while "
-                     "bd_switch_dynamic_resolution is on, 2 whenever the image "
-                     "is smaller than the screen (handheld 960x540 too)")
+                     "bd_switch_dynamic_resolution has lowered the height "
+                     "(at bd_switch_handheld_height the present is as before), "
+                     "2 whenever the image is smaller than the screen "
+                     "(handheld 960x540 too). It costs ~5.7 ms a frame on the "
+                     "console against ~0.9 for the bilinear present")
     .range(0, 2);
 
 #if defined(PLUME_DEKO3D)
@@ -372,9 +375,13 @@ bool SwitchDynamicResolutionFrame(double gpu_ms) {
     }
     // Up: the next height predicted under 95% of the budget for 2 s (the
     // pixel ratio scales the whole GPU time, which overstates it: cautious).
-    const int up = std::min(cur + 36, high);
-    const double predicted =
-        ema * (double(up) * double(up)) / (double(cur) * double(cur));
+    const int up = REXCVAR_GET(bd_switch_fsr) >= 1 ? high : std::min(cur + 36, high);
+    // FSR's extra cost (measured ~4.8 ms over the bilinear present) goes away
+    // at the configured height (bd_switch_fsr 1).
+    const double fsr_extra =
+        (REXCVAR_GET(bd_switch_fsr) == 1 && cur < high && up == high) ? 4.8 : 0.0;
+    const double predicted = std::max(0.0, ema - fsr_extra) *
+                             (double(up) * double(up)) / (double(cur) * double(cur));
     if (next == cur && up != cur && predicted < budget * 0.95) {
       if (fit_since == Clock::time_point{})
         fit_since = now;
@@ -384,6 +391,11 @@ bool SwitchDynamicResolutionFrame(double gpu_ms) {
       fit_since = {};
     }
   }
+  // With FSR (bd_switch_fsr >= 1) the steps between cost more than they save
+  // (FSR's ~4.8 ms over the bilinear present against ~2.5 ms for a step), so
+  // the height goes straight to either end.
+  if (next != cur && test_s == 0 && REXCVAR_GET(bd_switch_fsr) >= 1)
+    next = next < cur ? low : high;
   if (next == cur)
     return false;
   BD_INFO("[dynres] render height {} -> {} (GPU {:.1f} ms a frame, budget {:.1f}{})",
@@ -401,8 +413,14 @@ bool SwitchFsrWanted(u32 src_w, u32 src_h, u32 dst_w, u32 dst_h) {
   switch (REXCVAR_GET(bd_switch_fsr)) {
   case 2:
     return true;
-  case 1:
-    return REXCVAR_GET(bd_switch_dynamic_resolution);
+  case 1: {
+    // Only below the configured handheld height: there the present stays the
+    // bilinear one it always was.
+    int high = REXCVAR_GET(bd_switch_handheld_height);
+    if (high <= 0 || high >= 720)
+      high = 720;
+    return REXCVAR_GET(bd_switch_dynamic_resolution) && src_h + 8 < u32(high);
+  }
   default:
     return false;
   }
