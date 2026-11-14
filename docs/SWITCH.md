@@ -741,3 +741,11 @@ compile; code -7.9 %, registers down in 57 shaders, up in 1;
 bd_toon_vs_env 8192 -> 6912 bytes of code (15 + 15 bone-weight ifs in a row),
 bd_shadownull_vs_env 35 -> 31 registers, bd_normal_ps (buildings) 65 -> 63.
 The heavy pixel shaders use 63-65 registers.
+
+uam flag 16 (CompileBest) tried on the build machine (2026-11-15, after
+ifmerge): of the 86 pixel shaders only 5 get fewer registers and none of the
+heavy ones (bd_normal_ps, bd_toon_ps, the 320x180 pass: 63-64 registers either
+way), vertex shaders unchanged. Not worth the console hang risk: flags stay 431.
+Castle street with ifmerge: bd_toon_vs_env 34-37 ns a vertex (45-47 before),
+GPU 44-50 ms, 19.5-22 fps in the busiest windows (17-18 before); Main and Draw
+Thread each busy ~28-29 ms a frame.
