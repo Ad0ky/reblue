@@ -124,6 +124,14 @@ REXCVAR_DEFINE_BOOL(bd_deko3d_merge_barriers, false, "Switch",
                     "every cache invalidation of them), right before the next "
                     "command that does work: the same order, one drain instead "
                     "of several. Read at start.");
+REXCVAR_DEFINE_BOOL(bd_deko3d_fold_vs_masks, true, "Switch",
+                    "deko3d: each pipeline's vertex shader gets its vertex "
+                    "declaration's byte-swap masks as literals instead of "
+                    "reading them per vertex (the same values, so the same "
+                    "picture; fewer registers, e.g. bd_toon_vs_env 54 -> 40). "
+                    "Each shader and declaration pair is compiled once on the "
+                    "console, then kept in the shader cache. Read at start.");
+
 REXCVAR_DEFINE_BOOL(bd_deko3d_lean_barriers, false, "Switch",
                     "deko3d: a texture about to be rendered to (not read) waits "
                     "for the work before it but keeps the texture cache; the "
@@ -281,6 +289,7 @@ void ApplySwitchClocks() {
     options.depthCompression = REXCVAR_GET(bd_deko3d_depth_compression);
     options.mergeBarriers = REXCVAR_GET(bd_deko3d_merge_barriers);
     options.leanBarriers = REXCVAR_GET(bd_deko3d_lean_barriers);
+    options.foldVsMasks = REXCVAR_GET(bd_deko3d_fold_vs_masks);
     options.diag = static_cast<unsigned>(REXCVAR_GET(bd_deko3d_diag));
     // Four-core mode (from renut-nx): the uam compile thread on the system core when there is one, at 0x2C: below
     // the audio output (0x2A) and the Audio Worker (0x2B), above the XAudio engine threads moved there (0x2D). At
@@ -291,8 +300,9 @@ void ApplySwitchClocks() {
       options.compilePriority = 0x2C;
     }
     plume::Deko3DSetOptions(options);
-    BD_INFO("Switch: deko3d barriers: merged {}, lean {}{}",
+    BD_INFO("Switch: deko3d barriers: merged {}, lean {}; vertex declaration masks folded into the vertex shaders: {}{}",
             options.mergeBarriers ? "on" : "off", options.leanBarriers ? "on" : "off",
+            options.foldVsMasks ? "on" : "off",
             options.diag ? " | GPU COST EXPERIMENT " + std::to_string(options.diag) +
                                " (bd_deko3d_diag) every other 10 s window: the picture is wrong in those"
                          : std::string());

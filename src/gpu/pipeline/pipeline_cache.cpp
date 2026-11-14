@@ -266,14 +266,27 @@ std::unique_ptr<plume::RenderPipeline> Build(const PipelineState &state) {
     specMask |= state.pixelShader->shaderCacheEntry->specConstantsMask;
   }
   const u32 specValue = state.specConstants & specMask;
-  plume::RenderSpecConstant specConstant(0, specValue);
-  if (specValue != 0) {
-    desc.specConstants = &specConstant;
-    desc.specConstantsCount = 1;
-  } else {
-    desc.specConstants = nullptr;
-    desc.specConstantsCount = 0;
+  plume::RenderSpecConstant specConstants[8];
+  u32 specCount = 0;
+  if (specValue != 0)
+    specConstants[specCount++] = plume::RenderSpecConstant(0, specValue);
+#if defined(PLUME_DEKO3D)
+  // The vertex declaration's masks, which the shared constants give every
+  // draw of this pipeline (constant_buffers.cpp), for deko3d to write into
+  // the vertex shader as literals (Deko3DOptions::foldVsMasks, ids 920-926;
+  // shaders without those reads are unchanged).
+  {
+    const GuestVertexDeclaration &d = *state.vertexDeclaration;
+    const u32 masks[7] = {d.swappedTexcoords, d.swappedNormals,
+                          d.swappedBinormals, d.swappedTangents,
+                          d.swappedBlendWeights, d.swappedPositions,
+                          d.sintTexcoords};
+    for (u32 i = 0; i < 7; ++i)
+      specConstants[specCount++] = plume::RenderSpecConstant(920 + i, masks[i]);
   }
+#endif
+  desc.specConstants = specCount ? specConstants : nullptr;
+  desc.specConstantsCount = specCount;
 
   return CreateHostGraphicsPipeline(device, desc, "pipeline");
 #endif

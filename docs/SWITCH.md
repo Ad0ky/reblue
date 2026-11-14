@@ -691,3 +691,18 @@ the save dialog in dg17_01): guest code spins there waiting for a game thread
 that is waiting on a system service of that core. [gpu-vs] (bd_gpu_profile 2)
 sums the [gpu-shaders] rows by vertex shader. bdSinCos's hot path reads one
 pointer instead of three function-local statics.
+
+Castle street by vertex shader (2026-11-14, bd_gpu_profile 2, stock clocks):
+bd_toon_vs_env (the skinned characters) 550 Kvtx and 27 ms a frame with only
+~30 Kpx of pixels, bd_mirror_vs_norm 300 Kvtx / 16 ms (with 1.9 Mpx), the
+shadow pass (bd_shadownull_vs_env/norm) 360 Kvtx / 4.6 ms. The toon pass costs
+~4x the shadow pass per vertex for the same skinning. uam stats: the toon
+vertex shader used 54 registers. bd_deko3d_fold_vs_masks (on): the pipeline's
+vertex declaration masks (the byte-swap masks and the sign-extended texture
+coordinate mask, SharedConstants_raw[18][0], [19][0..3], [20][0..1]) are
+written into the vertex shader as literals; the draws read the same values, so
+the picture is the same. All 56 game vertex shaders compile that way (uam,
+flags 431); bd_toon_vs_env 54 -> 41 registers, bd_mirror_vs_env 56 -> 37,
+bd_shadownull_vs_env 35 -> 26, code 10-25% smaller. The variants compile on
+the console the first time each shader/declaration pair is drawn and are kept
+in the DKSH cache.

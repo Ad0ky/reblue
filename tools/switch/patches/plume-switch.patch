@@ -1,9 +1,9 @@
 diff --git a/plume_deko3d.cpp b/plume_deko3d.cpp
 new file mode 100644
-index 0000000..d541a07
+index 0000000..03cc252
 --- /dev/null
 +++ b/plume_deko3d.cpp
-@@ -0,0 +1,2073 @@
+@@ -0,0 +1,2108 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): device, memory, resources, shaders and pipelines. The command lists,
 +// the queue and the swapchain are in plume_deko3d_commands.cpp. docs/deko3d-renderer.md is the design; the facts about
@@ -1491,8 +1491,15 @@ index 0000000..d541a07
 +        return true;
 +    }
 +
++    // re:Blue (2026-11-14): the shared constant words Deko3DOptions::foldVsMasks replaces, in the order of the fold
++    // values (specialization constants 920-926): texture coordinates, normals, binormals, tangents, blend weights,
++    // positions (the swap masks), sign-extended texture coordinates.
++    static const char *const kFoldVsMaskReads[7] = {
++        "SharedConstants_raw[18][0]", "SharedConstants_raw[19][0]", "SharedConstants_raw[19][1]", "SharedConstants_raw[19][2]",
++        "SharedConstants_raw[19][3]", "SharedConstants_raw[20][0]", "SharedConstants_raw[20][1]"};
++
 +    const DkShader *Deko3DDevice::loadVariant(const Deko3DShader *base, const RenderSpecConstant *specConstants, uint32_t specConstantsCount,
-+                                              bool diagBones) {
++                                              bool diagBones, const uint32_t *fold) {
 +        Deko3DShaderImpl *shader = const_cast<Deko3DShaderImpl *>(static_cast<const Deko3DShaderImpl *>(base));
 +        // The constants this shader has whose value differs from its default, by id.
 +        std::string defines;
@@ -1512,6 +1519,11 @@ index 0000000..d541a07
 +                break;
 +            }
 +        }
++        const bool folding = fold && g_deko3dOptions.foldVsMasks && shader->glsl.find("SharedConstants_raw[") != std::string::npos;
++        if (folding)
++            specKey = mixHash(specKey, fold, 7 * sizeof(uint32_t));
++        if (diagBones)
++            specKey = mixHash(specKey, "diagBones", 9);
 +        {
 +            std::lock_guard<std::mutex> lock(shader->mutex);
 +            auto it = shader->known.find(specKey);
@@ -1535,6 +1547,18 @@ index 0000000..d541a07
 +        // vertices of a warp all read the same constant address. Measures what the divergent constant reads cost; the
 +        // skinned models collapse. The text differs, so the variant compiles anew.
 +        bool patched = false;
++        if (folding) {
++            for (int f = 0; f < 7; f++) {
++                const std::string from = kFoldVsMaskReads[f];
++                const std::string to = std::to_string(fold[f]) + "u";
++                size_t at = 0;
++                while ((at = source.find(from, at)) != std::string::npos) {
++                    source.replace(at, from.size(), to);
++                    at += to.size();
++                    patched = true;
++                }
++            }
++        }
 +        if (diagBones) {
 +            const std::string open = "[min(";
 +            size_t at = 0;
@@ -1755,6 +1779,16 @@ index 0000000..d541a07
 +                psSpec.push_back(RenderSpecConstant(906, zero));
 +            }
 +        }
++        // re:Blue (2026-11-14): the vertex declaration masks the pipeline passes as constants 920-926 (foldVsMasks).
++        uint32_t fold[7] = {};
++        bool haveFold = false;
++        for (uint32_t k = 0; k < desc.specConstantsCount; k++) {
++            const uint32_t id = desc.specConstants[k].index;
++            if (id >= 920 && id <= 926) {
++                fold[id - 920] = desc.specConstants[k].value;
++                haveFold = true;
++            }
++        }
 +        for (int i = 0; i < 3; i++) {
 +            if (!stages[i])
 +                continue;
@@ -1762,7 +1796,8 @@ index 0000000..d541a07
 +            const bool ownPs = i == 2 && !psSpec.empty();
 +            const DkShader *s = loadVariant(stages[i], own ? vsSpec.data() : ownPs ? psSpec.data() : desc.specConstants,
 +                                            own ? uint32_t(vsSpec.size()) : ownPs ? uint32_t(psSpec.size())
-+                                                                                  : desc.specConstantsCount);
++                                                                                  : desc.specConstantsCount,
++                                            false, i == 0 && haveFold ? fold : nullptr);
 +            if (!s) {
 +                ok = false;
 +                continue;
@@ -1771,7 +1806,7 @@ index 0000000..d541a07
 +            const DkShader *d = s;
 +            if (i == 0 && (g_deko3dOptions.diag & 32)) {
 +                d = loadVariant(stages[i], own ? vsSpec.data() : desc.specConstants,
-+                                own ? uint32_t(vsSpec.size()) : desc.specConstantsCount, true);
++                                own ? uint32_t(vsSpec.size()) : desc.specConstantsCount, true, haveFold ? fold : nullptr);
 +                if (!d)
 +                    d = s;
 +                p->hasDiag = p->hasDiag || d != s;
@@ -2079,10 +2114,10 @@ index 0000000..d541a07
 +};
 diff --git a/plume_deko3d.h b/plume_deko3d.h
 new file mode 100644
-index 0000000..69ee861
+index 0000000..27d79ad
 --- /dev/null
 +++ b/plume_deko3d.h
-@@ -0,0 +1,748 @@
+@@ -0,0 +1,755 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): plume's render interface on deko3d, the Switch's own GPU API, for
 +// Renut's renderer (docs/deko3d-renderer.md). MIT, as plume. deko3d is zlib (fincs, devkitPro); the shaders are compiled
@@ -2724,8 +2759,9 @@ index 0000000..69ee861
 +        void collectRetired();
 +        void noteSubmission(); // after a submission: a fence for its serial
 +        // re:Blue (2026-11-12): diagBones, the variant with bd_deko3d_diag experiment 32's text change.
++        // re:Blue (2026-11-14): fold, the vertex declaration masks (7 values, foldVsMasks) or null.
 +        const DkShader *loadVariant(const Deko3DShader *shader, const RenderSpecConstant *specConstants, uint32_t specConstantsCount,
-+                                    bool diagBones = false);
++                                    bool diagBones = false, const uint32_t *fold = nullptr);
 +        bool compile(DkStage stage, const std::string &source, std::vector<uint8_t> &dksh, std::string &log);
 +        bool loadCode(const std::vector<uint8_t> &dksh, DkShader &shader, const char *what);
 +        void compileWorker();
@@ -2813,6 +2849,12 @@ index 0000000..69ee861
 +        // waits for the work before it but keeps the texture cache: only a read after a write needs it invalidated,
 +        // and that read's own transition does it.
 +        bool leanBarriers = false;
++        // re:Blue (2026-11-14): a pipeline's vertex shader gets its vertex declaration's byte-swap masks (and the
++        // sign-extended texture coordinates mask) as literals in place of the shared constant reads
++        // (SharedConstants_raw[18][0], [19][0..3], [20][0..1]): the values the draws would read, so the same results,
++        // and uam drops the selects and keeps fewer registers (bd_toon_vs_env: 54 -> 40). Pipelines pass the values
++        // as specialization constants 920-926 (Deko3DFoldVsMaskIds).
++        bool foldVsMasks = false;
 +        // re:Blue (2026-11-12): GPU cost experiments, changing the picture, for measuring only (0 in play). Bits:
 +        // 1 the draws are not sent (their state still is), 2 every scissor is one pixel (no pixel work), 4 fragment
 +        // barriers do not wait (their cache invalidations stay), 8 every draw is cut to one primitive (3 vertices
