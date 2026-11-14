@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="res/reblue.png" alt="re:Blue logo" width="112">
+
 # re:Blue for Nintendo Switch
 
 **Blue Dragon (Xbox 360), recompiled to run natively on the Nintendo Switch.**
