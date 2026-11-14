@@ -728,3 +728,16 @@ bd_toon_vs_env 46.6-49.4 ns a vertex (with mask folding alone 45-47), GPU
 nothing, so it is off by default. The toon row's time is attributed by
 timestamps at shader changes, so part of it may be earlier draws' pixel work
 still in flight; shader-level changes to it have given ~5% at most.
+
+renut-nx's docs/deko3d-shader-optimisations.md, against our pack (2026-11-15):
+we already run uam's codegen passes (flags 431: PRMT, global offset fold, shift
+distribution, interpolation cache, DomCSE, uniform joins; not 16, which hung
+on one shader). Their GLSL passes target their recompiler's text (many ?:
+selects, render-scale divisors, storage-buffer bone rows); ours has almost no
+?: but ~50 ifs per shader, XenosRecomp's predication. ifmerge (2.29) fits:
+tools/switch/deko3d/glsl_ifmerge.py (our own) merges runs of ifs on the same
+condition variable at build time. 3818 merges in the 142 game shaders, all
+compile; code -7.9 %, registers down in 57 shaders, up in 1;
+bd_toon_vs_env 8192 -> 6912 bytes of code (15 + 15 bone-weight ifs in a row),
+bd_shadownull_vs_env 35 -> 31 registers, bd_normal_ps (buildings) 65 -> 63.
+The heavy pixel shaders use 63-65 registers.

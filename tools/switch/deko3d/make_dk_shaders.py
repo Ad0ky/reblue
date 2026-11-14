@@ -29,6 +29,9 @@ import sys
 import tempfile
 import zlib
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from glsl_ifmerge import merge_ifs  # noqa: E402
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import spv_to_dk_glsl  # noqa: E402
@@ -235,6 +238,15 @@ def main():
             stripped += n
             results[key] = (stage, glsl)
     print(f'deko3d: fragment shaders read locations {sorted(read)}; {stripped} unread vertex outputs removed')
+
+    # Runs of ifs on the same condition, one if/else each (glsl_ifmerge.py): fewer branches and joins per vertex
+    # and pixel, the same values.
+    merged = 0
+    for key, (stage, glsl) in list(results.items()):
+        glsl, n = merge_ifs(glsl)
+        merged += n
+        results[key] = (stage, glsl)
+    print(f'deko3d: {merged} ifs merged into the one before them (same condition)')
 
     raw = bytearray()
     game, host = [], []
