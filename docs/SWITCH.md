@@ -721,3 +721,10 @@ output statements, and every vertex shader is compiled with
 "invariant gl_Position" so both passes give the same depth. uam (flags 431):
 all 56 vertex shaders compile both ways; bd_toon_vs_env position-only 5120
 bytes of code and 23 registers (full, invariant: 8192 / 40).
+
+bd_deko3d_depth_only_vs measured (2026-11-15, castle street, second run):
+bd_toon_vs_env 46.6-49.4 ns a vertex (with mask folding alone 45-47), GPU
+52-59 ms a frame as before. No gain, and the invariant position is a risk for
+nothing, so it is off by default. The toon row's time is attributed by
+timestamps at shader changes, so part of it may be earlier draws' pixel work
+still in flight; shader-level changes to it have given ~5% at most.

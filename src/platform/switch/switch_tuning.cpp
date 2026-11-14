@@ -132,14 +132,14 @@ REXCVAR_DEFINE_BOOL(bd_deko3d_fold_vs_masks, true, "Switch",
                     "Each shader and declaration pair is compiled once on the "
                     "console, then kept in the shader cache. Read at start.");
 
-REXCVAR_DEFINE_BOOL(bd_deko3d_depth_only_vs, true, "Switch",
+REXCVAR_DEFINE_BOOL(bd_deko3d_depth_only_vs, false, "Switch",
                     "deko3d: a pipeline that only writes depth (the game draws "
                     "the castle street's crowd first depth only, then in "
                     "colour) gets its vertex shader with gl_Position only; "
                     "every vertex shader is compiled with an invariant "
                     "position so both passes give the same depth. If "
-                    "characters show holes or flicker, set false. Read at "
-                    "start.");
+                    "characters show holes or flicker, set false. Off: measured "
+                    "no gain in the castle street (2026-11-15). Read at start.");
 
 REXCVAR_DEFINE_BOOL(bd_deko3d_lean_barriers, false, "Switch",
                     "deko3d: a texture about to be rendered to (not read) waits "
