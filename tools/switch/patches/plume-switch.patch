@@ -1,9 +1,9 @@
 diff --git a/plume_deko3d.cpp b/plume_deko3d.cpp
 new file mode 100644
-index 0000000..03cc252
+index 0000000..5c862a0
 --- /dev/null
 +++ b/plume_deko3d.cpp
-@@ -0,0 +1,2108 @@
+@@ -0,0 +1,2158 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): device, memory, resources, shaders and pipelines. The command lists,
 +// the queue and the swapchain are in plume_deko3d_commands.cpp. docs/deko3d-renderer.md is the design; the facts about
@@ -22,6 +22,8 @@ index 0000000..03cc252
 +#include <cstdio>
 +#include <cstdlib>
 +#include <cstring>
++#include <string>
++#include <string_view>
 +#include <malloc.h>
 +#include <unistd.h>
 +
@@ -1499,7 +1501,7 @@ index 0000000..03cc252
 +        "SharedConstants_raw[19][3]", "SharedConstants_raw[20][0]", "SharedConstants_raw[20][1]"};
 +
 +    const DkShader *Deko3DDevice::loadVariant(const Deko3DShader *base, const RenderSpecConstant *specConstants, uint32_t specConstantsCount,
-+                                              bool diagBones, const uint32_t *fold) {
++                                              bool diagBones, const uint32_t *fold, int vertexMode) {
 +        Deko3DShaderImpl *shader = const_cast<Deko3DShaderImpl *>(static_cast<const Deko3DShaderImpl *>(base));
 +        // The constants this shader has whose value differs from its default, by id.
 +        std::string defines;
@@ -1524,6 +1526,12 @@ index 0000000..03cc252
 +            specKey = mixHash(specKey, fold, 7 * sizeof(uint32_t));
 +        if (diagBones)
 +            specKey = mixHash(specKey, "diagBones", 9);
++        // vertexMode (depthOnlyVs): 1 a vertex shader (invariant position), 2 one for a depth-only pipeline (and the
++        // outputs dropped).
++        if (!g_deko3dOptions.depthOnlyVs || shader->glsl.find("gl_Position") == std::string::npos)
++            vertexMode = 0;
++        if (vertexMode)
++            specKey = mixHash(specKey, &vertexMode, sizeof(vertexMode));
 +        {
 +            std::lock_guard<std::mutex> lock(shader->mutex);
 +            auto it = shader->known.find(specKey);
@@ -1547,6 +1555,34 @@ index 0000000..03cc252
 +        // vertices of a warp all read the same constant address. Measures what the divergent constant reads cost; the
 +        // skinned models collapse. The text differs, so the variant compiles anew.
 +        bool patched = false;
++        if (vertexMode) {
++            const size_t eol = source.find('\n');
++            if (eol != std::string::npos) {
++                source.insert(eol + 1, "invariant gl_Position;\n");
++                patched = true;
++            }
++        }
++        if (vertexMode == 2) {
++            // Statements "out_var_X = ...;" / "out_var_X.y = ...;" on a line of their own (spirv-cross' form).
++            std::string kept;
++            kept.reserve(source.size());
++            size_t at = 0;
++            while (at < source.size()) {
++                size_t end = source.find('\n', at);
++                if (end == std::string::npos)
++                    end = source.size();
++                const std::string_view line(source.data() + at, end - at);
++                const size_t first = line.find_first_not_of(" \t");
++                const size_t last = line.find_last_not_of(" \t\r");
++                const bool drop = first != std::string_view::npos && line.compare(first, 8, "out_var_") == 0 &&
++                                  line[last] == ';' && line.find('=') != std::string_view::npos;
++                if (!drop)
++                    kept.append(line).push_back('\n');
++                at = end + 1;
++            }
++            source.swap(kept);
++            patched = true;
++        }
 +        if (folding) {
 +            for (int f = 0; f < 7; f++) {
 +                const std::string from = kFoldVsMaskReads[f];
@@ -1782,6 +1818,19 @@ index 0000000..03cc252
 +        // re:Blue (2026-11-14): the vertex declaration masks the pipeline passes as constants 920-926 (foldVsMasks).
 +        uint32_t fold[7] = {};
 +        bool haveFold = false;
++        // re:Blue (2026-11-14, depthOnlyVs): whether this pipeline only writes depth.
++        bool depthOnly = false;
++        if (g_deko3dOptions.depthOnlyVs && desc.depthEnabled && !desc.alphaToCoverageEnabled && !stages[1]) {
++            uint32_t spec0 = 0;
++            for (uint32_t k = 0; k < desc.specConstantsCount; k++)
++                if (desc.specConstants[k].index == 0)
++                    spec0 = desc.specConstants[k].value;
++            bool colour = false;
++            for (uint32_t t = 0; t < desc.renderTargetCount; t++)
++                colour |= desc.renderTargetBlend[t].renderTargetWriteMask != 0;
++            const bool psSafe = !stages[2] || ((spec0 & 2u) == 0 && stages[2]->glsl.find("gl_FragDepth") == std::string::npos);
++            depthOnly = !colour && psSafe;
++        }
 +        for (uint32_t k = 0; k < desc.specConstantsCount; k++) {
 +            const uint32_t id = desc.specConstants[k].index;
 +            if (id >= 920 && id <= 926) {
@@ -1797,7 +1846,7 @@ index 0000000..03cc252
 +            const DkShader *s = loadVariant(stages[i], own ? vsSpec.data() : ownPs ? psSpec.data() : desc.specConstants,
 +                                            own ? uint32_t(vsSpec.size()) : ownPs ? uint32_t(psSpec.size())
 +                                                                                  : desc.specConstantsCount,
-+                                            false, i == 0 && haveFold ? fold : nullptr);
++                                            false, i == 0 && haveFold ? fold : nullptr, i == 0 ? (depthOnly ? 2 : 1) : 0);
 +            if (!s) {
 +                ok = false;
 +                continue;
@@ -1806,7 +1855,8 @@ index 0000000..03cc252
 +            const DkShader *d = s;
 +            if (i == 0 && (g_deko3dOptions.diag & 32)) {
 +                d = loadVariant(stages[i], own ? vsSpec.data() : desc.specConstants,
-+                                own ? uint32_t(vsSpec.size()) : desc.specConstantsCount, true, haveFold ? fold : nullptr);
++                                own ? uint32_t(vsSpec.size()) : desc.specConstantsCount, true, haveFold ? fold : nullptr,
++                                depthOnly ? 2 : 1);
 +                if (!d)
 +                    d = s;
 +                p->hasDiag = p->hasDiag || d != s;
@@ -2114,10 +2164,10 @@ index 0000000..03cc252
 +};
 diff --git a/plume_deko3d.h b/plume_deko3d.h
 new file mode 100644
-index 0000000..27d79ad
+index 0000000..7c0990a
 --- /dev/null
 +++ b/plume_deko3d.h
-@@ -0,0 +1,755 @@
+@@ -0,0 +1,762 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): plume's render interface on deko3d, the Switch's own GPU API, for
 +// Renut's renderer (docs/deko3d-renderer.md). MIT, as plume. deko3d is zlib (fincs, devkitPro); the shaders are compiled
@@ -2761,7 +2811,7 @@ index 0000000..27d79ad
 +        // re:Blue (2026-11-12): diagBones, the variant with bd_deko3d_diag experiment 32's text change.
 +        // re:Blue (2026-11-14): fold, the vertex declaration masks (7 values, foldVsMasks) or null.
 +        const DkShader *loadVariant(const Deko3DShader *shader, const RenderSpecConstant *specConstants, uint32_t specConstantsCount,
-+                                    bool diagBones = false, const uint32_t *fold = nullptr);
++                                    bool diagBones = false, const uint32_t *fold = nullptr, int vertexMode = 0);
 +        bool compile(DkStage stage, const std::string &source, std::vector<uint8_t> &dksh, std::string &log);
 +        bool loadCode(const std::vector<uint8_t> &dksh, DkShader &shader, const char *what);
 +        void compileWorker();
@@ -2855,6 +2905,13 @@ index 0000000..27d79ad
 +        // and uam drops the selects and keeps fewer registers (bd_toon_vs_env: 54 -> 40). Pipelines pass the values
 +        // as specialization constants 920-926 (Deko3DFoldVsMaskIds).
 +        bool foldVsMasks = false;
++        // re:Blue (2026-11-14): a pipeline that only writes depth (no colour write, no alpha to coverage, the pixel
++        // shader's alpha test off and no gl_FragDepth) gets its vertex shader without the outputs (gl_Position only),
++        // so uam drops what computes them; the castle street's crowd is drawn twice, depth first, with the full
++        // character vertex shader. Every vertex shader is then compiled with "invariant gl_Position" so the
++        // position-only shader and the full one give the same positions (the colour pass tests LESS_EQUAL against the
++        // depth pass).
++        bool depthOnlyVs = false;
 +        // re:Blue (2026-11-12): GPU cost experiments, changing the picture, for measuring only (0 in play). Bits:
 +        // 1 the draws are not sent (their state still is), 2 every scissor is one pixel (no pixel work), 4 fragment
 +        // barriers do not wait (their cache invalidations stay), 8 every draw is cut to one primitive (3 vertices

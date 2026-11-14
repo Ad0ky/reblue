@@ -706,3 +706,18 @@ flags 431); bd_toon_vs_env 54 -> 41 registers, bd_mirror_vs_env 56 -> 37,
 bd_shadownull_vs_env 35 -> 26, code 10-25% smaller. The variants compile on
 the console the first time each shader/declaration pair is drawn and are kept
 in the DKSH cache.
+
+Castle street, the old GPU cost experiments by pass (main 960x536 pass ~44 ms
+with them off): no draws 0.8 ms; one primitive a draw 3-4 ms (the per-draw
+cost); no pixels -14/15 ms; stride 0 (no vertex data, degenerate triangles, so
+no pixels either) -22/25 ms, so vertex fetch ~8-10 ms; bone reads at element 0
+no change. That leaves ~15-20 ms of vertex shading, mostly bd_toon_vs_env.
+The pipeline list shows bd_toon pipelines with colour writes off: the game
+draws the crowd depth only first, then in colour, both with the full character
+vertex shader. bd_deko3d_depth_only_vs (on): a depth-only pipeline (no colour
+write, no alpha to coverage, alpha test off, no gl_FragDepth; every pack pixel
+shader's one discard is the alpha test) gets its vertex shader without the
+output statements, and every vertex shader is compiled with
+"invariant gl_Position" so both passes give the same depth. uam (flags 431):
+all 56 vertex shaders compile both ways; bd_toon_vs_env position-only 5120
+bytes of code and 23 registers (full, invariant: 8192 / 40).

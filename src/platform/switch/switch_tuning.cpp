@@ -132,6 +132,15 @@ REXCVAR_DEFINE_BOOL(bd_deko3d_fold_vs_masks, true, "Switch",
                     "Each shader and declaration pair is compiled once on the "
                     "console, then kept in the shader cache. Read at start.");
 
+REXCVAR_DEFINE_BOOL(bd_deko3d_depth_only_vs, true, "Switch",
+                    "deko3d: a pipeline that only writes depth (the game draws "
+                    "the castle street's crowd first depth only, then in "
+                    "colour) gets its vertex shader with gl_Position only; "
+                    "every vertex shader is compiled with an invariant "
+                    "position so both passes give the same depth. If "
+                    "characters show holes or flicker, set false. Read at "
+                    "start.");
+
 REXCVAR_DEFINE_BOOL(bd_deko3d_lean_barriers, false, "Switch",
                     "deko3d: a texture about to be rendered to (not read) waits "
                     "for the work before it but keeps the texture cache; the "
@@ -290,6 +299,7 @@ void ApplySwitchClocks() {
     options.mergeBarriers = REXCVAR_GET(bd_deko3d_merge_barriers);
     options.leanBarriers = REXCVAR_GET(bd_deko3d_lean_barriers);
     options.foldVsMasks = REXCVAR_GET(bd_deko3d_fold_vs_masks);
+    options.depthOnlyVs = REXCVAR_GET(bd_deko3d_depth_only_vs);
     options.diag = static_cast<unsigned>(REXCVAR_GET(bd_deko3d_diag));
     // Four-core mode (from renut-nx): the uam compile thread on the system core when there is one, at 0x2C: below
     // the audio output (0x2A) and the Audio Worker (0x2B), above the XAudio engine threads moved there (0x2D). At
@@ -300,9 +310,9 @@ void ApplySwitchClocks() {
       options.compilePriority = 0x2C;
     }
     plume::Deko3DSetOptions(options);
-    BD_INFO("Switch: deko3d barriers: merged {}, lean {}; vertex declaration masks folded into the vertex shaders: {}{}",
+    BD_INFO("Switch: deko3d barriers: merged {}, lean {}; vertex declaration masks folded into the vertex shaders: {}; position-only vertex shaders for depth-only pipelines: {}{}",
             options.mergeBarriers ? "on" : "off", options.leanBarriers ? "on" : "off",
-            options.foldVsMasks ? "on" : "off",
+            options.foldVsMasks ? "on" : "off", options.depthOnlyVs ? "on" : "off",
             options.diag ? " | GPU COST EXPERIMENT " + std::to_string(options.diag) +
                                " (bd_deko3d_diag) every other 10 s window: the picture is wrong in those"
                          : std::string());
