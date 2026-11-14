@@ -684,3 +684,10 @@ packed normals, no expansion to 32-bit floats), so the vertex cost is not
 oversized data. A "[deko3d] vertices per frame" line now gives the vertices
 the draws ask for and the per-vertex bytes at those (before the post-transform
 cache), to size the geometry the castle street draws.
+
+2026-11-14: switch_system_core_mixer is ignored (stderr says so). A guest
+XAudio engine thread on the system core froze the console twice (the warp, and
+the save dialog in dg17_01): guest code spins there waiting for a game thread
+that is waiting on a system service of that core. [gpu-vs] (bd_gpu_profile 2)
+sums the [gpu-shaders] rows by vertex shader. bdSinCos's hot path reads one
+pointer instead of three function-local statics.

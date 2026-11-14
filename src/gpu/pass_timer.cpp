@@ -354,6 +354,46 @@ void ReportShaders(double window_s) {
                 : std::string(),
             target < g_targetNames.size() ? g_targetNames[target] : "?");
   }
+  // The same frames by vertex shader (2026-11-14, the castle street's ~1.6
+  // million vertices a frame): a row's vertices and GPU time are shared out
+  // among its vertex shaders by their draws, so the split is approximate when
+  // a pixel shader runs with several.
+  struct VsTotals {
+    double vertices = 0, ns = 0, draws = 0;
+    u32 pixelShaders = 0;
+  };
+  std::unordered_map<u64, VsTotals> byVs;
+  double allVertices = 0;
+  for (const auto &[hash, t] : g_shaderTotals) {
+    if (!t.draws)
+      continue;
+    allVertices += double(t.vertices);
+    for (const auto &[h, n] : t.vsDraws) {
+      const double share = double(n) / double(t.draws);
+      VsTotals &v = byVs[h];
+      v.vertices += double(t.vertices) * share;
+      v.ns += t.ns * share;
+      v.draws += double(n);
+      ++v.pixelShaders;
+    }
+  }
+  std::vector<std::pair<u64, VsTotals>> vsRows(byVs.begin(), byVs.end());
+  std::sort(vsRows.begin(), vsRows.end(), [](const auto &a, const auto &b) {
+    return a.second.vertices > b.second.vertices;
+  });
+  if (!vsRows.empty())
+    BD_INFO("[gpu-vs] {} vertex shaders, {:.0f} Kvtx per timed frame (the "
+            "[gpu-shaders] rows by vertex shader, most vertices first)",
+            vsRows.size(), allVertices / frames / 1e3);
+  for (size_t i = 0; i < vsRows.size() && i < 12; ++i) {
+    const VsTotals &v = vsRows[i].second;
+    BD_INFO("[gpu-vs]   vs {:016x}  {:7.1f} Kvtx/frame {:4.1f}%  {:6.1f} "
+            "draws/frame  {:5.2f} ms/frame (with its pixels)  with {} pixel "
+            "shader(s)",
+            vsRows[i].first, v.vertices / frames / 1e3,
+            allVertices > 0 ? 100.0 * v.vertices / allVertices : 0.0,
+            v.draws / frames, v.ns / frames / 1e6, v.pixelShaders);
+  }
   g_shaderTotals.clear();
   g_shaderFrameNs = 0;
   g_betweenNs = 0;

@@ -48,8 +48,8 @@ REXCVAR_DEFINE_BOOL(switch_system_core_xma, false, "Kernel",
                     "Switch four-core mode: the XMA Decoder on the system core too")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(switch_system_core_mixer, 0, "Kernel",
-                     "Switch four-core mode: how many of the game's XAudio engine threads (switch_guest_sound_entries) "
-                     "go to the system core. 0 = none (the reverb can take most of a core, and the system keeps about "
+                     "Switch four-core mode: IGNORED since 2026-11-14 (it froze the console at warps and saves). Was: how "
+                     "many of the game's XAudio engine threads (switch_guest_sound_entries) go to the system core. 0 = none (the reverb can take most of a core, and the system keeps about "
                      "half of core 3); watch 'system core 3: idle' in rex_perfil.log before raising it")
     .range(0, 8)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -552,8 +552,20 @@ int RexSwitchEnsureForwarderNpdm(void) {
 }
 
 bool RexSwitchSystemCoreXma(void) { return RexSwitchSystemCore() >= 0 && REXCVAR_GET(switch_system_core_xma); }
+// re:Blue (2026-11-14): ignored. A guest XAudio engine thread on the system core froze the whole console (a hard
+// reset) at a warp and at the save dialog: guest code can spin there waiting for a game thread that waits on a system
+// service of that core. The cvar stays so old reblue.toml files load; it is reported, not applied.
 int RexSwitchSystemCoreMixerThreads(void) {
-  return RexSwitchSystemCore() >= 0 ? int(REXCVAR_GET(switch_system_core_mixer)) : 0;
+  static const bool warned = [] {
+    if (REXCVAR_GET(switch_system_core_mixer) > 0)
+      std::fprintf(stderr,
+                   "[cores] switch_system_core_mixer = %d ignored: game sound threads on the system core froze the "
+                   "console (delete the line from reblue.toml)\n",
+                   int(REXCVAR_GET(switch_system_core_mixer)));
+    return true;
+  }();
+  (void)warned;
+  return 0;
 }
 int RexSwitchSystemCoreMixerPriority(void) { return REXCVAR_GET(switch_system_core_mixer_priority); }
 bool RexSwitchSystemCoreCompiles(void) {
@@ -566,6 +578,12 @@ void RexSwitchSystemCoreDescribe(char* out, size_t out_len) {
                 "process cores 0x%X, system core %d (switch_system_core %d; game threads on 0x%X); forwarder NPDM %s",
                 RexSwitchProcessCoreMask(), RexSwitchSystemCore(), RexSwitchSystemCoreMode(), RexSwitchAppCoreMask(),
                 g_npdm_status.c_str());
+  if (REXCVAR_GET(switch_system_core_mixer) > 0) {
+    const size_t used = std::strlen(out);
+    if (used < out_len)
+      std::snprintf(out + used, out_len - used, "; switch_system_core_mixer %d ignored (froze the console)",
+                    int(REXCVAR_GET(switch_system_core_mixer)));
+  }
 }
 
 bool RexSwitchCoreIdleSample(int core, unsigned long long* idle_ticks, unsigned long long* at_ticks) {

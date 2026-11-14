@@ -14,6 +14,7 @@
  * @license   BSD 3-Clause License
  *            See LICENSE file in the project root for full license text.
  */
+#include <atomic>
 #include <climits>
 #include <cfloat>
 #include <cmath>
@@ -236,14 +237,34 @@ bool SelfTest(PPCContext &ctx, u8 *base, const Constants *k) {
 
 } // namespace
 
+namespace {
+// Set once the native is checked and on: the hot path reads this one pointer
+// (three function-local statics were three acquire loads a call; bdSinCos is
+// called about three times per animated bone, 8% of the castle street's Main
+// Thread in the 2026-11-13 profile).
+std::atomic<const Constants *> g_sincos{nullptr};
+
+bool SinCosReady(PPCContext &ctx, uint8_t *base) {
+  static const bool ok = [&] {
+    const Constants *k = REXCVAR_GET(bd_native_sincos) ? GetConstants() : nullptr;
+    const bool good = k && SelfTest(ctx, base, k);
+    if (good)
+      g_sincos.store(k, std::memory_order_release);
+    return good;
+  }();
+  return ok;
+}
+} // namespace
+
 // bdSinCos(float *sin_out = r3, float *cos_out = r4, float angle = f1).
 REX_HOOK_RAW(bdSinCos) {
-  static const bool on = REXCVAR_GET(bd_native_sincos);
-  static const Constants *k = on ? GetConstants() : nullptr;
-  static const bool ok = k && SelfTest(ctx, base, k);
-  if (!ok) [[unlikely]] {
-    __imp__bdSinCos(ctx, base);
-    return;
+  const Constants *k = g_sincos.load(std::memory_order_acquire);
+  if (!k) [[unlikely]] {
+    if (!SinCosReady(ctx, base)) {
+      __imp__bdSinCos(ctx, base);
+      return;
+    }
+    k = g_sincos.load(std::memory_order_acquire);
   }
   // The flush mode the original leaves on return (it turns flushing off on
   // entry and again at the end).
