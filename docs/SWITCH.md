@@ -749,3 +749,14 @@ way), vertex shaders unchanged. Not worth the console hang risk: flags stay 431.
 Castle street with ifmerge: bd_toon_vs_env 34-37 ns a vertex (45-47 before),
 GPU 44-50 ms, 19.5-22 fps in the busiest windows (17-18 before); Main and Draw
 Thread each busy ~28-29 ms a frame.
+
+Bone rows (2026-11-15): XenosRecomp reads skinning's bone rows with a range
+check and a four-way select each (mix(vec4(0.0), exMatrix[min(i, 195)],
+bvec4(i < 196))); 267 reads in 15 vertex shaders. exMatrix (offset 960, 196
+rows) ends exactly at the 4 KiB block's end, and with bd_deko3d_delta_constants
+the block is bound with exactly 4096 bytes, so row 196 reads as zero, which is
+what the check gives. tools/switch/deko3d/glsl_bonerow.py writes those reads as
+REBLUE_ROW (the same code by default: same compiled size in all 15) and plume
+defines REBLUE_BONE_ROW_ZERO (bd_deko3d_bone_row_zero, on with the delta
+constants). uam, folded masks + ifmerge: bd_toon_vs_env 5888 -> 5120 bytes,
+bd_shadownull_vs_env 4352 -> 3584, all 15 smaller.

@@ -1,9 +1,9 @@
 diff --git a/plume_deko3d.cpp b/plume_deko3d.cpp
 new file mode 100644
-index 0000000..5c862a0
+index 0000000..677bcf2
 --- /dev/null
 +++ b/plume_deko3d.cpp
-@@ -0,0 +1,2158 @@
+@@ -0,0 +1,2168 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): device, memory, resources, shaders and pipelines. The command lists,
 +// the queue and the swapchain are in plume_deko3d_commands.cpp. docs/deko3d-renderer.md is the design; the facts about
@@ -1532,6 +1532,9 @@ index 0000000..5c862a0
 +            vertexMode = 0;
 +        if (vertexMode)
 +            specKey = mixHash(specKey, &vertexMode, sizeof(vertexMode));
++        const bool boneRows = g_deko3dOptions.boneRowZero && shader->glsl.find("REBLUE_ROW(") != std::string::npos;
++        if (boneRows)
++            specKey = mixHash(specKey, "boneRowZero", 11);
 +        {
 +            std::lock_guard<std::mutex> lock(shader->mutex);
 +            auto it = shader->known.find(specKey);
@@ -1555,6 +1558,13 @@ index 0000000..5c862a0
 +        // vertices of a warp all read the same constant address. Measures what the divergent constant reads cost; the
 +        // skinned models collapse. The text differs, so the variant compiles anew.
 +        bool patched = false;
++        if (boneRows) {
++            const size_t eol = source.find('\n');
++            if (eol != std::string::npos) {
++                source.insert(eol + 1, "#define REBLUE_BONE_ROW_ZERO\n");
++                patched = true;
++            }
++        }
 +        if (vertexMode) {
 +            const size_t eol = source.find('\n');
 +            if (eol != std::string::npos) {
@@ -2164,10 +2174,10 @@ index 0000000..5c862a0
 +};
 diff --git a/plume_deko3d.h b/plume_deko3d.h
 new file mode 100644
-index 0000000..7c0990a
+index 0000000..7db8249
 --- /dev/null
 +++ b/plume_deko3d.h
-@@ -0,0 +1,762 @@
+@@ -0,0 +1,766 @@
 +//
 +// plume deko3d back end (banjo-nx, 2026-10-17): plume's render interface on deko3d, the Switch's own GPU API, for
 +// Renut's renderer (docs/deko3d-renderer.md). MIT, as plume. deko3d is zlib (fincs, devkitPro); the shaders are compiled
@@ -2912,6 +2922,10 @@ index 0000000..7c0990a
 +        // position-only shader and the full one give the same positions (the colour pass tests LESS_EQUAL against the
 +        // depth pass).
 +        bool depthOnlyVs = false;
++        // re:Blue (2026-11-15): the vertex shaders get REBLUE_BONE_ROW_ZERO defined (tools/switch/deko3d/
++        // glsl_bonerow.py): a bone row read past the end of the 4 KiB constant block without its range check, read as
++        // zero by the GPU. Only when the vertex constants are bound with exactly 4096 bytes.
++        bool boneRowZero = false;
 +        // re:Blue (2026-11-12): GPU cost experiments, changing the picture, for measuring only (0 in play). Bits:
 +        // 1 the draws are not sent (their state still is), 2 every scissor is one pixel (no pixel work), 4 fragment
 +        // barriers do not wait (their cache invalidations stay), 8 every draw is cut to one primitive (3 vertices

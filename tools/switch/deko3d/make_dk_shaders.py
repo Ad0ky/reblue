@@ -31,6 +31,7 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from glsl_ifmerge import merge_ifs  # noqa: E402
+from glsl_bonerow import rewrite_bone_rows  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -247,6 +248,16 @@ def main():
         merged += n
         results[key] = (stage, glsl)
     print(f'deko3d: {merged} ifs merged into the one before them (same condition)')
+
+    # Bone row reads that end at the constant block's end, as REBLUE_ROW (glsl_bonerow.py): the same code unless the
+    # console defines REBLUE_BONE_ROW_ZERO.
+    rows = 0
+    for key, (stage, glsl) in list(results.items()):
+        if stage == 'vert':
+            glsl, n = rewrite_bone_rows(glsl)
+            rows += n
+            results[key] = (stage, glsl)
+    print(f'deko3d: {rows} bone row reads as REBLUE_ROW')
 
     raw = bytearray()
     game, host = [], []
