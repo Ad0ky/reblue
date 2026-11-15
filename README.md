@@ -34,9 +34,11 @@ Measured at the Switch's **stock clocks** (CPU 1020 MHz, GPU 460 MHz) in handhel
 | Scene | Frame rate at stock clocks |
 | :--- | ---: |
 | Most of the field, towns and dungeons | **25–30 FPS**, the game's cap is 30 |
-| The castle town's main street, with its crowd | **16–18 FPS** |
+| The castle town's main street, with its crowd | **19–23 FPS** (16–18 before 1.3.6) |
 
-Entering a new area can hitch for a moment while its files load. The castle town's main street is limited by both the GPU (about 1.6 million vertices a frame) and the CPU (the animation of its many characters). Work on both continues.
+Entering a new area can hitch for a moment while its files load. The castle town's main street is limited by both the GPU (about 1.6 million vertices a frame) and the CPU (the animation of its many characters), now about equally. Work on both continues.
+
+After an update, the first area load can freeze for a few seconds while the console compiles the new shaders once; they are kept in the shader cache.
 
 ## Getting started
 
@@ -75,6 +77,10 @@ Most options are in the game's own **Settings** menu. The rest are in `sdmc:/swi
 | `bd_scene_color_r11g11b10` | false | A lighter scene color format (recommended: true). Set false if glows or transparency look wrong. |
 | `bd_opt_audio_hints` | 1 | The game's Audio Hints: spoken and on-screen notices such as "Playable" or "Checkpoint". |
 | `bd_gpu_profile` | 1 | GPU timing in the log: 0 off, 1 render passes, 2 per shader (costs GPU time). |
+| `bd_deko3d_fold_vs_masks` | true | Vertex shaders get their vertex layout's flags built in (same picture, faster). Set false only to rule it out when reporting a graphics problem. |
+| `bd_deko3d_bone_row_zero` | true | Skinning skips a per-read range check (same picture, faster). Set false only to rule it out when reporting a graphics problem. |
+
+Don't add `switch_system_core_mixer`: since 1.3.6 it is ignored, because moving a game sound thread to the system core could freeze the console.
 
 The [installation guide](docs/INSTALL-SWITCH.md#settings) explains the release's `reblue.toml`.
 
